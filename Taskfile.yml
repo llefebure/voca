@@ -1,0 +1,83 @@
+version: '3'
+
+tasks:
+  supabase-start:
+    desc: Start the local Supabase stack
+    cmds:
+      - supabase start
+
+  supabase-stop:
+    desc: Stop the local Supabase stack
+    cmds:
+      - supabase stop
+
+  stop-backend:
+    desc: Stop the backend server
+    cmds:
+      - lsof -ti:8000 | xargs kill -9 || echo "Backend not running"
+
+  stop-frontend:
+    desc: Stop the frontend server
+    cmds:
+      - lsof -ti:3000 | xargs kill -9 || echo "Frontend not running"
+
+  stop-all:
+    desc: Stop all services (Supabase, Backend, Frontend)
+    cmds:
+      - task supabase-stop
+      - task stop-backend
+      - task stop-frontend
+
+  supabase-migrate:
+    desc: Apply database migrations
+    cmds:
+      - supabase migration up
+
+  supabase-ready:
+    desc: Ensure Supabase is running and migrated
+    cmds:
+      - task supabase-start
+      - task supabase-migrate
+
+  frontend:
+    desc: Start frontend development server
+    cmds:
+      - cd frontend && npm run dev
+
+  backend:
+    desc: Start backend development server
+    cmds:
+      - cd src/voca && uv run python main.py
+
+  all:
+    desc: Start both frontend and backend servers together
+    deps:
+      - frontend
+      - backend
+
+  dev:
+    desc: Start everything (Supabase, Backend, Frontend) with one command
+    cmds:
+      - task supabase-ready
+      - task all
+
+  lint:
+    desc: Run ruff linter
+    cmds:
+      - uv run ruff check .
+
+  lint-fix:
+    desc: Run ruff linter and fix safe errors
+    cmds:
+      - uv run ruff check --fix .
+
+  format:
+    desc: Run ruff formatter
+    cmds:
+      - uv run ruff format .
+
+  tidy:
+    desc: Fix lint errors and format code
+    cmds:
+      - task lint-fix
+      - task format

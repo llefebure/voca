@@ -1,0 +1,24 @@
+[project]
+name = "voca"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.162.2",
+    "fsrs>=6.3.2",
+    "httpx>=0.28.1",
+    "pydantic-ai>=2.66.0",
+    "python-dotenv>=1.2.4",
+    "supabase>=2.34.1",
+    "uvicorn>=0.54.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.17.3",
+]
