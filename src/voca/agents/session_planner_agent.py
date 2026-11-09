@@ -31,6 +31,6 @@ session_planner_agent = Agent(
         "1. CARDS: Select 3-8 due cards. Favor the most overdue and those that fit the suggested lesson.\n"
         "2. LESSON: Pick a lesson template that matches the user's goals and level.\n"
         "3. HOOK: Write a warm, personal opening hook for the tutor, referencing the user's profile or past sessions.\n\n"
-        "Ensure the laenr's current level and goals are considered."
+        "Ensure the learner's current level and goals are considered."
     ),
 )
