@@ -81,3 +81,12 @@ tasks:
     cmds:
       - task lint-fix
       - task format
+
+  test:
+    desc: Run integration tests
+    env:
+      PYTHONPATH: ".:src/voca"
+      SUPABASE_URL: https://dummy.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: dummy_key
+    cmds:
+      - uv run pytest {{.CLI_ARGS}}

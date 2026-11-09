@@ -42,7 +42,7 @@ async def get_suggested_lesson(ctx: RunContext[TutorDeps]) -> str:
     lesson = res.data[0]
     return f"Suggested Lesson: {lesson['title']}. Scenario: {lesson['scenario']}. Objectives: {lesson['objectives']}."
 
-@spanish_tutor.system_prompt
+@spanish_tutor.instructions
 def tutor_system_prompt(ctx: RunContext[TutorDeps]) -> str:
     profile = ctx.deps.get("user_profile", {})
     goals = profile.get("goals", "learn Spanish")

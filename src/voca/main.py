@@ -233,7 +233,7 @@ async def translate_text(request: TranslationRequest):
     # Use a simple Pydantic AI agent for translation
     translator = Agent(
         model=ollama_model,
-        system_prompt=f"You are a professional translator. Translate the text from {request.source_lang} to {request.target_lang}. Return ONLY the translation."
+        instructions=f"You are a professional translator. Translate the text from {request.source_lang} to {request.target_lang}. Return ONLY the translation."
     )
     result = await translator.run(request.text)
     # Result is a string because no result_type is defined

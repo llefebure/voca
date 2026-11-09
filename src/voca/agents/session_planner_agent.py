@@ -1,7 +1,7 @@
 from typing import TypedDict
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from services.llm import ollama_model
 
 
@@ -25,7 +25,7 @@ session_planner_agent = Agent(
     model=ollama_model,
     deps_type=PlannerDeps,
     output_type=SessionPlan,
-    system_prompt=(
+    instructions=(
         "You are a session planner for a language learning app. Your goal is to create a customized "
         "plan for the learner's next Spanish conversation.\n\n"
         "1. CARDS: Select 3-8 due cards. Favor the most overdue and those that fit the suggested lesson.\n"
@@ -34,3 +34,16 @@ session_planner_agent = Agent(
         "Ensure the learner's current level and goals are considered."
     ),
 )
+
+
+@session_planner_agent.instructions
+def inject_planner_deps(ctx: RunContext[PlannerDeps]) -> str:
+    profile = ctx.deps["user_profile"]
+    due_cards = ctx.deps["due_cards"]
+    lessons = ctx.deps["available_lessons"]
+
+    return (
+        f"USER PROFILE: {profile}\n\n"
+        f"DUE CARDS:\n" + "\n".join(f"- {c.get('front')}" for c in due_cards) + "\n\n"
+        f"AVAILABLE LESSONS:\n" + "\n".join(f"- {l.get('title')}: {l.get('scenario')}" for l in lessons)
+    )

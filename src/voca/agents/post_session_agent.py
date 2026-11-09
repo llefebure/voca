@@ -1,7 +1,7 @@
 from typing import TypedDict
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from services.llm import ollama_model
 
 
@@ -40,7 +40,7 @@ post_session_agent = Agent(
     model=ollama_model,
     deps_type=PostSessionDeps,
     output_type=PostSessionResult,
-    system_prompt=(
+    instructions=(
         "You are a language learning analyst. Your job is to review a conversation transcript "
         "between a Spanish tutor and a learner and extract valuable learning material.\n\n"
         "1. NEW CARDS: Identify 5-8 new cards. Prioritize items the learner struggled with, "
@@ -50,3 +50,17 @@ post_session_agent = Agent(
         "(e.g., newly mentioned interests, improved fluency)."
     ),
 )
+
+
+@post_session_agent.instructions
+def inject_post_session_deps(ctx: RunContext[PostSessionDeps]) -> str:
+    transcript_text = "\n".join(
+        f"{m['speaker']}: {m['text']}" for m in ctx.deps["transcript"]
+    )
+    due_cards_text = "\n".join(
+        f"- {c.get('front')}: {c.get('back')}" for c in ctx.deps["due_cards"]
+    )
+    return (
+        f"SESSION TRANSCRIPT:\n{transcript_text}\n\n"
+        f"DUE CARDS TO EVALUATE:\n{due_cards_text}"
+    )
