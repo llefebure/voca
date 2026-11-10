@@ -18,6 +18,34 @@ dependencies = [
 requires = ["uv_build>=0.12.0,<0.13.0"]
 build-backend = "uv_build"
 
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors (E501 excluded: prompt string literals aren't chopped)
+  "F",   # pyflakes
+  "W",   # pycodestyle warnings
+  "I",   # import sorting
+  "UP",  # pyupgrade
+  "B",   # flake8-bugbear
+  "BLE", # blind except
+]
+ignore = [
+  "E501",   # long agent-prompt string literals stay readable; formatter handles real code
+  "B008",   # FastAPI: Depends() in argument defaults is the standard pattern
+  "BLE001", # health/auth helpers deliberately catch broad exceptions
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_default_fixture_loop_scope = "function"
+asyncio_mode = "auto"
+addopts = "-m 'not integration'"
+markers = [
+  "integration: needs a running Ollama server with real models (opt-in via `uv run task test:all`)",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",

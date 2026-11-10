@@ -47,7 +47,7 @@ tasks:
   backend:
     desc: Start backend development server
     cmds:
-      - cd src/voca && uv run python main.py
+      - uv run uvicorn voca.main:app --host 0.0.0.0 --port 8000 --reload
 
   all:
     desc: Start both frontend and backend servers together
@@ -83,10 +83,40 @@ tasks:
       - task format
 
   test:
-    desc: Run integration tests
+    desc: Run the offline pytest suite (no Ollama or Supabase needed; integration tests excluded)
     env:
-      PYTHONPATH: ".:src/voca"
       SUPABASE_URL: https://dummy.supabase.co
       SUPABASE_SERVICE_ROLE_KEY: dummy_key
     cmds:
       - uv run pytest {{.CLI_ARGS}}
+
+  test:all:
+    desc: Run every test, including live-LLM integration tests (needs Ollama running locally)
+    env:
+      SUPABASE_URL: https://dummy.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: dummy_key
+    cmds:
+      - uv run pytest --override-ini="addopts=" {{.CLI_ARGS}}
+
+  typecheck:
+    desc: Typecheck the frontend
+    cmds:
+      - cd frontend && npm run typecheck
+
+  lint:frontend:
+    desc: Lint the frontend
+    cmds:
+      - cd frontend && npm run lint
+
+  check:frontend:
+    desc: Typecheck + lint the frontend
+    cmds:
+      - task: typecheck
+      - task: lint:frontend
+
+  check:
+    desc: Every automated gate (offline backend tests + ruff + frontend typecheck/lint)
+    cmds:
+      - task test
+      - task: lint
+      - task: check:frontend
