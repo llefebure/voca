@@ -6,7 +6,7 @@ Attach a workspace capability to the agent and use `ctx.workspace` in tools:
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.capabilities import LocalWorkspace
 
-agent = Agent('openai:gpt-5.2', capabilities=[LocalWorkspace('~/project')])
+agent = Agent("openai:gpt-5.2", capabilities=[LocalWorkspace("~/project")])
 
 
 @agent.tool

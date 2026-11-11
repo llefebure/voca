@@ -47,9 +47,9 @@ logfire.configure()
 logfire.instrument_pydantic_ai()
 
 agent = Agent(
-    'anthropic:claude-fable-5-1',
-    name='hello_world_agent',
-    instructions='Be concise, reply with one sentence.',
+    "anthropic:claude-fable-5-1",
+    name="hello_world_agent",
+    instructions="Be concise, reply with one sentence.",
     capabilities=[Caching()],
 )
 
@@ -77,8 +77,8 @@ import random
 from pydantic_ai import Agent, RunContext
 
 agent = Agent(
-    'google:gemini-3-flash-preview',
-    name='dice_game_agent',
+    "google:gemini-3-flash-preview",
+    name="dice_game_agent",
     deps_type=str,
     instructions=(
         "You're a dice game, you should roll the die and see if the number "
@@ -100,9 +100,9 @@ def get_player_name(ctx: RunContext[str]) -> str:
     return ctx.deps
 
 
-dice_result = agent.run_sync('My guess is 4', deps='Anne')
+dice_result = agent.run_sync("My guess is 4", deps="Anne")
 print(dice_result.output)
-#> Congratulations Anne, you guessed correctly! You're a winner!
+# > Congratulations Anne, you guessed correctly! You're a winner!
 ```
 
 ### Structured Output with Pydantic Models
@@ -118,12 +118,12 @@ class CityLocation(BaseModel):
     country: str
 
 
-agent = Agent('google:gemini-3-flash-preview', name='city_location_agent', output_type=CityLocation)
-result = agent.run_sync('Where were the olympics held in 2012?')
+agent = Agent("google:gemini-3-flash-preview", name="city_location_agent", output_type=CityLocation)
+result = agent.run_sync("Where were the olympics held in 2012?")
 print(result.output)
-#> city='London' country='United Kingdom'
+# > city='London' country='United Kingdom'
 print(result.usage)
-#> RunUsage(cost=Decimal('0.0000525'), input_tokens=57, output_tokens=8, requests=1)
+# > RunUsage(cost=Decimal('0.0000525'), input_tokens=57, output_tokens=8, requests=1)
 ```
 
 ### Dependency Injection
@@ -134,8 +134,8 @@ from datetime import UTC, datetime
 from pydantic_ai import Agent, RunContext
 
 agent = Agent(
-    'openai:gpt-5.2',
-    name='greeting_agent',
+    "openai:gpt-5.2",
+    name="greeting_agent",
     deps_type=str,
     instructions="Use the customer's name while replying to them.",
 )
@@ -148,12 +148,12 @@ def add_the_users_name(ctx: RunContext[str]) -> str:
 
 @agent.instructions
 def add_the_date() -> str:
-    return f'The date is {datetime.now(UTC).date()}.'
+    return f"The date is {datetime.now(UTC).date()}."
 
 
-result = agent.run_sync('What is the date?', deps='Frank')
+result = agent.run_sync("What is the date?", deps="Frank")
 print(result.output)
-#> Hello Frank, the date today is 2032-01-02.
+# > Hello Frank, the date today is 2032-01-02.
 ```
 
 ### Testing with TestModel
@@ -162,15 +162,15 @@ print(result.output)
 from pydantic_ai import Agent
 from pydantic_ai.models.test import TestModel
 
-my_agent = Agent('openai:gpt-5.2', name='my_agent', instructions='...')
+my_agent = Agent("openai:gpt-5.2", name="my_agent", instructions="...")
 
 
 async def test_my_agent():
     """Unit test for my_agent, to be run by pytest."""
     m = TestModel()
     with my_agent.override(model=m):
-        result = await my_agent.run('Testing my agent...')
-        assert result.output == 'success (no tool calls)'
+        result = await my_agent.run("Testing my agent...")
+        assert result.output == "success (no tool calls)"
     assert m.last_model_request_parameters.function_tools == []
 ```
 
@@ -183,11 +183,11 @@ from pydantic_ai import Agent
 from pydantic_ai.capabilities import Thinking, WebSearch
 
 agent = Agent(
-    'anthropic:claude-opus-4-6',
-    name='research_assistant_agent',
-    instructions='You are a research assistant. Be thorough and cite sources.',
+    "anthropic:claude-opus-4-6",
+    name="research_assistant_agent",
+    instructions="You are a research assistant. Be thorough and cite sources.",
     capabilities=[
-        Thinking(effort='high'),
+        Thinking(effort="high"),
         WebSearch(),
     ],
 )
@@ -207,11 +207,11 @@ hooks = Hooks()
 
 @hooks.on.before_model_request
 async def log_request(ctx: RunContext, request_context: ModelRequestContext) -> ModelRequestContext:
-    print(f'Sending {len(request_context.messages)} messages')
+    print(f"Sending {len(request_context.messages)} messages")
     return request_context
 
 
-agent = Agent('openai:gpt-5.2', name='hooks_agent', capabilities=[hooks])
+agent = Agent("openai:gpt-5.2", name="hooks_agent", capabilities=[hooks])
 ```
 
 For a custom capability hook that performs I/O under Temporal, DBOS, or Prefect, mark a fixed method with `@durable_operation(name='...')`. The required name becomes part of persisted durable-unit names, so keep it stable even if the Python method is renamed. For dynamically contributed handlers, return them from `get_durable_operations()` and invoke a typed handle with `ctx.durable_operation(self, name, handler)`. Always set a stable capability `id`; without a durability capability both forms call the original async handler directly. Arguments and results must be serializable like durable tool inputs and outputs.
@@ -231,7 +231,7 @@ from pydantic_ai import Agent
 #   - Thinking:
 #       effort: high
 
-agent = Agent.from_file('agent.yaml')
+agent = Agent.from_file("agent.yaml")
 ```
 
 ### Realtime (speech-to-speech) sessions
@@ -268,14 +268,12 @@ from pydantic_ai.messages import (
 from pydantic_ai.realtime import RealtimeSessionErrorEvent, RealtimeTurnCompleteEvent
 from pydantic_ai.realtime.openai import OpenAIRealtimeModelSettings
 
-agent = Agent(instructions='You are a helpful voice assistant.')
+agent = Agent(instructions="You are a helpful voice assistant.")
 
 
 async def main(microphone_chunk: bytes):
-    settings = OpenAIRealtimeModelSettings(openai_voice='alloy', turn_detection=False)
-    async with agent.realtime(
-        'openai:gpt-realtime', model_settings=settings
-    ).session() as session:
+    settings = OpenAIRealtimeModelSettings(openai_voice="alloy", turn_detection=False)
+    async with agent.realtime("openai:gpt-realtime", model_settings=settings).session() as session:
         # The chunk must already be mono PCM16 at `session.audio_input_sample_rate`.
         await session.send_audio(microphone_chunk)
         await session.commit_audio()
@@ -288,9 +286,9 @@ async def main(microphone_chunk: bytes):
                 match event:
                     case PartDeltaEvent(delta=SpeechPartDelta(audio_chunk=chunk)) if chunk:
                         ...  # play audio out
-                    case PartEndEvent(part=SpeechPart(speaker='user', transcript=t)):
+                    case PartEndEvent(part=SpeechPart(speaker="user", transcript=t)):
                         if t is not None:
-                            print('user said:', t)
+                            print("user said:", t)
                         user_turn_complete = True
                     case RealtimeTurnCompleteEvent():
                         turn_complete = True
@@ -302,7 +300,7 @@ async def main(microphone_chunk: bytes):
                     break
 
     # A session builds ordinary ModelMessage history: hand it off to a text agent.
-    notes = Agent('openai:gpt-5.2', instructions='Summarize.')
+    notes = Agent("openai:gpt-5.2", instructions="Summarize.")
     await notes.run(message_history=session.all_messages())
 ```
 

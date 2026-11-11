@@ -11,7 +11,7 @@ import random
 
 from pydantic_ai import Agent, RunContext
 
-agent = Agent('google:gemini-3-flash-preview', name='dice_tools_agent', deps_type=str)
+agent = Agent("google:gemini-3-flash-preview", name="dice_tools_agent", deps_type=str)
 
 
 @agent.tool_plain
@@ -48,22 +48,22 @@ from enum import StrEnum
 
 from pydantic_ai import Agent, UseEnumMemberDocstrings
 
-agent = Agent('openai:gpt-5.2', name='ticket_agent')
+agent = Agent("openai:gpt-5.2", name="ticket_agent")
 
 
 class Urgency(UseEnumMemberDocstrings, StrEnum):
     """How urgent the ticket is."""
 
-    low = 'low'
+    low = "low"
     """Can wait a week."""
-    high = 'high'
+    high = "high"
     """Needs attention today."""
 
 
 @agent.tool_plain
 def set_urgency(urgency: Urgency) -> str:
     """Set the urgency of the ticket."""
-    return f'Urgency set to {urgency.value}.'
+    return f"Urgency set to {urgency.value}."
 ```
 
 Without the mix-in the docstrings are ignored and the schema is unchanged. `Literal`s have nowhere to write a
@@ -109,11 +109,11 @@ from pydantic_ai import Agent
 from pydantic_ai.capabilities import MCP
 
 agent = Agent(
-    'openai:gpt-5.2',
-    name='mcp_agent',
+    "openai:gpt-5.2",
+    name="mcp_agent",
     capabilities=[
-        MCP('https://mcp.example.com/api'),               # Streamable HTTP, local-only by default
-        MCP('https://mcp.example.com/other', native=True),  # opt into native with local fallback
+        MCP("https://mcp.example.com/api"),  # Streamable HTTP, local-only by default
+        MCP("https://mcp.example.com/other", native=True),  # opt into native with local fallback
     ],
 )
 ```
@@ -127,9 +127,9 @@ from pydantic_ai import Agent
 from pydantic_ai.capabilities import MCP
 
 agent = Agent(
-    'openai:gpt-5.2',
-    name='mcp_stdio_agent',
-    capabilities=[MCP(local=StdioTransport(command='python', args=['mcp_server.py']))],
+    "openai:gpt-5.2",
+    name="mcp_stdio_agent",
+    capabilities=[MCP(local=StdioTransport(command="python", args=["mcp_server.py"]))],
 )
 ```
 
@@ -146,10 +146,10 @@ from pydantic_ai import Agent
 from pydantic_ai.common_tools.duckduckgo import duckduckgo_search_tool
 
 agent = Agent(
-    'openai:gpt-5.2',
-    name='duckduckgo_search_agent',
+    "openai:gpt-5.2",
+    name="duckduckgo_search_agent",
     tools=[duckduckgo_search_tool()],
-    instructions='Search DuckDuckGo for the given query and return the results.',
+    instructions="Search DuckDuckGo for the given query and return the results.",
 )
 ```
 

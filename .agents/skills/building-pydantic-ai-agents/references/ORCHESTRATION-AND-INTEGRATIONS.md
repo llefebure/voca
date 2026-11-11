@@ -9,13 +9,13 @@ Use agent delegation when one agent should call another and return the result.
 ```python
 from pydantic_ai import Agent, RunContext
 
-parent = Agent('openai:gpt-5.2', name='parent_agent')
-researcher = Agent('openai:gpt-5.2', name='researcher_agent', output_type=str)
+parent = Agent("openai:gpt-5.2", name="parent_agent")
+researcher = Agent("openai:gpt-5.2", name="researcher_agent", output_type=str)
 
 
 @parent.tool
 async def research(ctx: RunContext, topic: str) -> str:
-    result = await researcher.run(f'Research: {topic}', usage=ctx.usage)
+    result = await researcher.run(f"Research: {topic}", usage=ctx.usage)
     return result.output
 ```
 
@@ -68,8 +68,8 @@ from pydantic_ai import ModelRequest
 from pydantic_ai.direct import model_request_sync
 
 response = model_request_sync(
-    'openai:gpt-5.2',
-    [ModelRequest.user_text_prompt('Summarize this in one sentence.')],
+    "openai:gpt-5.2",
+    [ModelRequest.user_text_prompt("Summarize this in one sentence.")],
 )
 ```
 
@@ -119,7 +119,7 @@ Use `Embedder(...)` for query/document embeddings when the user is building retr
 ```python
 from pydantic_ai import Embedder
 
-embedder = Embedder('openai:text-embedding-3-small')
+embedder = Embedder("openai:text-embedding-3-small")
 ```
 
 ## Generate Images
@@ -129,8 +129,8 @@ Use `ImageGenerator(...)` when the application, rather than an agent, decides th
 ```python
 from pydantic_ai import ImageGenerator
 
-generator = ImageGenerator('openai:gpt-image-2')
-result = generator.generate_sync('A watercolor map of a floating city.')
+generator = ImageGenerator("openai:gpt-image-2")
+result = generator.generate_sync("A watercolor map of a floating city.")
 image_bytes = result.image.data
 ```
 

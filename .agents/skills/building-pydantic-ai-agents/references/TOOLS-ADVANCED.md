@@ -14,24 +14,24 @@ from pydantic_ai import (
     ToolDenied,
 )
 
-agent = Agent('openai:gpt-5.2', name='approval_agent', output_type=[str, DeferredToolRequests])
+agent = Agent("openai:gpt-5.2", name="approval_agent", output_type=[str, DeferredToolRequests])
 
 
 @agent.tool_plain(requires_approval=True)
 def delete_file(path: str) -> str:
-    return f'File {path!r} deleted'
+    return f"File {path!r} deleted"
 
 
-result = agent.run_sync('Delete __init__.py')
+result = agent.run_sync("Delete __init__.py")
 messages = result.all_messages()
 
 assert isinstance(result.output, DeferredToolRequests)
 results = DeferredToolResults()
 for call in result.output.approvals:
     # Your decision logic (ask a human, check a policy); here an exact-match allowlist
-    allowed = call.args_as_dict()['path'] in {'tmp/cache.txt'}
+    allowed = call.args_as_dict()["path"] in {"tmp/cache.txt"}
     # True approves; ToolDenied(message) denies and tells the model why
-    results.approvals[call.tool_call_id] = allowed or ToolDenied('That file may not be deleted')
+    results.approvals[call.tool_call_id] = allowed or ToolDenied("That file may not be deleted")
 
 # Resume from the history plus the decisions; no new prompt is needed
 result = agent.run_sync(message_history=messages, deferred_tool_results=results)
@@ -52,14 +52,14 @@ Raise `ModelRetry` from inside the tool when the model should correct and try ag
 ```python
 from pydantic_ai import Agent, ModelRetry, RunContext
 
-agent = Agent('openai:gpt-5.2', name='retry_agent', deps_type=dict[str, int])
+agent = Agent("openai:gpt-5.2", name="retry_agent", deps_type=dict[str, int])
 
 
 @agent.tool(retries=2)
 def get_user_by_name(ctx: RunContext[dict[str, int]], name: str) -> int:
     user_id = ctx.deps.get(name)
     if user_id is None:
-        raise ModelRetry(f'No user found with name {name!r}')
+        raise ModelRetry(f"No user found with name {name!r}")
     return user_id
 ```
 
@@ -80,14 +80,14 @@ from pathlib import Path
 
 from pydantic_ai import Agent, ToolFailed
 
-agent = Agent('openai:gpt-5.2')
+agent = Agent("openai:gpt-5.2")
 
 
 @agent.tool_plain
 def read_file(path: str) -> str:
     file_path = Path(path)
     if not file_path.is_file():
-        raise ToolFailed(f'File not found: {path}')
+        raise ToolFailed(f"File not found: {path}")
     return file_path.read_text()
 ```
 
@@ -112,19 +112,24 @@ from pydantic_ai import (
     RunContext,
 )
 
-agent = Agent('openai:gpt-5.2', name='validation_agent', deps_type=int, output_type=[str, DeferredToolRequests])
+agent = Agent(
+    "openai:gpt-5.2",
+    name="validation_agent",
+    deps_type=int,
+    output_type=[str, DeferredToolRequests],
+)
 
 
 def validate_transfer(ctx: RunContext[int], amount: int) -> None:
     if amount > ctx.deps:
-        raise ModelRetry(f'Amount must not exceed {ctx.deps}')
+        raise ModelRetry(f"Amount must not exceed {ctx.deps}")
     if amount > 100 and not ctx.tool_call_approved:
         raise ApprovalRequired()
 
 
 @agent.tool(args_validator=validate_transfer)
 def transfer_funds(ctx: RunContext[int], amount: int) -> str:
-    return f'Transferred {amount}'
+    return f"Transferred {amount}"
 ```
 
 Validation runs before the approval/deferral gate, so invalid arguments are retried instead of sent to an approver. Under durable execution, a tool with an `args_validator` gets its own validation activity, step, or task; tools without one schedule no extra durable unit.
@@ -143,15 +148,15 @@ Example with `ToolReturn`:
 ```python
 from pydantic_ai import Agent, BinaryContent, ToolReturn
 
-agent = Agent('openai:gpt-5.2', name='tool_return_agent')
+agent = Agent("openai:gpt-5.2", name="tool_return_agent")
 
 
 @agent.tool_plain
 def click_and_capture(x: int, y: int) -> ToolReturn:
     return ToolReturn(
-        return_value=f'Successfully clicked at ({x}, {y})',
-        content=['After:', BinaryContent(data=b'png-data', media_type='image/png')],
-        metadata={'coordinates': {'x': x, 'y': y}},
+        return_value=f"Successfully clicked at ({x}, {y})",
+        content=["After:", BinaryContent(data=b"png-data", media_type="image/png")],
+        metadata={"coordinates": {"x": x, "y": y}},
     )
 ```
 
@@ -194,12 +199,12 @@ Use tool-level deferred loading when the agent has many tools and the model shou
 ```python
 from pydantic_ai import Agent
 
-agent = Agent('openai:gpt-5.2', name='tool_search_agent')
+agent = Agent("openai:gpt-5.2", name="tool_search_agent")
 
 
 @agent.tool_plain(defer_loading=True)
 def lookup_internal_policy(policy_name: str) -> str:
-    return f'policy details for {policy_name}'
+    return f"policy details for {policy_name}"
 ```
 
 Good fit:

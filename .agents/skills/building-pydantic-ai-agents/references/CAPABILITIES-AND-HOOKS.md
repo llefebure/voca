@@ -11,10 +11,10 @@ from pydantic_ai import Agent
 from pydantic_ai.capabilities import Thinking, WebSearch
 
 agent = Agent(
-    'anthropic:claude-opus-4-6',
-    name='capabilities_agent',
+    "anthropic:claude-opus-4-6",
+    name="capabilities_agent",
     capabilities=[
-        Thinking(effort='high'),
+        Thinking(effort="high"),
         WebSearch(),
     ],
 )
@@ -40,8 +40,12 @@ Use the unified `Thinking` capability or the `thinking` model setting.
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import Thinking
 
-capability_agent = Agent('anthropic:claude-opus-4-6', name='capability_agent', capabilities=[Thinking(effort='high')])
-settings_agent = Agent('anthropic:claude-opus-4-6', name='settings_agent', model_settings={'thinking': 'high'})
+capability_agent = Agent(
+    "anthropic:claude-opus-4-6", name="capability_agent", capabilities=[Thinking(effort="high")]
+)
+settings_agent = Agent(
+    "anthropic:claude-opus-4-6", name="settings_agent", model_settings={"thinking": "high"}
+)
 ```
 
 Supported effort values:
@@ -62,7 +66,7 @@ Add `Caching()` to every agent you build unless its requests are one-offs that a
 from pydantic_ai import Agent
 from pydantic_ai.capabilities import Caching
 
-agent = Agent('anthropic:claude-opus-5-5', name='cached_agent', capabilities=[Caching()])
+agent = Agent("anthropic:claude-opus-5-5", name="cached_agent", capabilities=[Caching()])
 ```
 
 Accepted values (the same for `model_settings={'cache': ...}`):
@@ -103,11 +107,11 @@ hooks = Hooks()
 
 @hooks.on.before_model_request
 async def log_request(ctx: RunContext, request_context: ModelRequestContext) -> ModelRequestContext:
-    print(f'Sending {len(request_context.messages)} messages')
+    print(f"Sending {len(request_context.messages)} messages")
     return request_context
 
 
-@hooks.on.before_tool_execute(tools=['send_email'])
+@hooks.on.before_tool_execute(tools=["send_email"])
 async def audit_tool(
     ctx: RunContext,
     *,
@@ -115,11 +119,11 @@ async def audit_tool(
     tool_def: ToolDefinition,
     args: ValidatedToolArgs,
 ) -> ValidatedToolArgs:
-    print(f'Executing {call.tool_name}')
+    print(f"Executing {call.tool_name}")
     return args
 
 
-agent = Agent('openai:gpt-5.2', name='hooks_agent', capabilities=[hooks])
+agent = Agent("openai:gpt-5.2", name="hooks_agent", capabilities=[hooks])
 ```
 
 Important hook families:
@@ -168,15 +172,15 @@ from pydantic_ai.capabilities import AbstractCapability, on_event
 
 
 @dataclass(kw_only=True)
-class FileReadEvent(CapabilityEvent, namespace='workspace', name='file_read'):
+class FileReadEvent(CapabilityEvent, namespace="workspace", name="file_read"):
     path: str
 
 
 class Watcher(AbstractCapability[Any]):
     @on_event(FileReadEvent)
     async def _on_read(self, ctx: RunContext[Any], event: FileReadEvent) -> None:
-        if event.path.endswith('AGENTS.md'):
-            ctx.enqueue('Follow the instructions in the discovered AGENTS.md file.')
+        if event.path.endswith("AGENTS.md"):
+            ctx.enqueue("Follow the instructions in the discovered AGENTS.md file.")
 ```
 
 ## Build a Custom Capability
@@ -237,7 +241,7 @@ class RequestCounter(AbstractCapability[Any]):
         *,
         result: AgentRunResult[Any],
     ) -> AgentRunResult[Any]:
-        logger.info('%s made %d model requests', self.label, self._requests)
+        logger.info("%s made %d model requests", self.label, self._requests)
         return result
 ```
 
