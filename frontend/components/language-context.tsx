@@ -1,21 +1,21 @@
 'use client'
 
 import * as React from 'react'
-import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { DEFAULT_LANGUAGE } from '@/lib/languages'
 
 /**
  * The active learning language and the user's practiced languages, shared by the
- * sidebar toggle and every page (provided by DashboardLayout).
+ * sidebar toggle and every page (mounted in the root layout).
  *
- * `profiles.target_language` is the *active language pointer*: the language being
+ * `profiles.target_language` is the *target language pointer*: the language being
  * practiced right now. Per-language learner details (level/goals/interests) live in
- * the `user_languages` table, one row per language the user has onboarded.
+ * the `user_languages` table, one row per language the user has onboarded — rows
+ * for directly-picked languages are created lazily by Profile edits or the
+ * post-session analysis.
  *
- * Auth/onboarding pages render outside this provider — pages that use it are all
- * under DashboardLayout. If no user is signed in, the context stays empty; the
- * pages themselves redirect to /auth as they do today.
+ * If no user is signed in, the context stays empty; the pages themselves redirect
+ * to /auth as they do today.
  */
 
 export type PracticedLanguage = {
@@ -35,10 +35,8 @@ export type LanguageContextValue = {
   practicedLanguages: PracticedLanguage[]
   /** True until the profile pointer + language rows have loaded. */
   loading: boolean
-  /** Switch the active language; persists to profiles.target_language. */
+  /** Switch the target language; persists to profiles.target_language. */
   toggleLanguage: (code: string) => Promise<void>
-  /** Route to the add-language flow (the onboarding wizard). */
-  addLanguage: () => void
   /** Refetch after external changes (e.g. onboarding finished for a new user). */
   refresh: () => Promise<void>
 }
@@ -60,7 +58,6 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   const [activeLanguage, setActiveLanguage] = React.useState<string | null>(null)
   const [practicedLanguages, setPracticedLanguages] = React.useState<PracticedLanguage[]>([])
   const [loading, setLoading] = React.useState(true)
-  const router = useRouter()
 
   const refresh = React.useCallback(async () => {
     const {
@@ -133,13 +130,9 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
     [activeLanguage],
   )
 
-  const addLanguage = React.useCallback(() => {
-    router.push('/onboarding')
-  }, [router])
-
   const value = React.useMemo(
-    () => ({ activeLanguage, practicedLanguages, loading, toggleLanguage, addLanguage, refresh }),
-    [activeLanguage, practicedLanguages, loading, toggleLanguage, addLanguage, refresh],
+    () => ({ activeLanguage, practicedLanguages, loading, toggleLanguage, refresh }),
+    [activeLanguage, practicedLanguages, loading, toggleLanguage, refresh],
   )
 
   return <LanguageContext value={value}>{children}</LanguageContext>

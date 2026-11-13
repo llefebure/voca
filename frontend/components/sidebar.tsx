@@ -13,11 +13,10 @@ import {
   ChevronRight,
   Languages,
   LogOut,
-  PlusIcon,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem, DropdownMenuItem, DropdownMenuGroup, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem, DropdownMenuItem, DropdownMenuGroup, DropdownMenuLabel } from "@/components/ui/dropdown-menu"
 import { useLanguage } from "@/components/language-context"
 import { SUPPORTED_LANGUAGES, UPCOMING_LANGUAGES, languageName } from "@/lib/languages"
 import { supabase } from "@/lib/supabase"
@@ -34,10 +33,10 @@ export function Sidebar() {
   const [isCollapsed, setIsCollapsed] = React.useState(false)
   const pathname = usePathname()
   const router = useRouter()
-  const { activeLanguage, practicedLanguages, toggleLanguage, addLanguage } = useLanguage()
+  const { activeLanguage, practicedLanguages, toggleLanguage } = useLanguage()
 
-  // Supported languages the user has not onboarded yet; they can be switched to
-  // directly (onboarding details arrive later via Profile / re-onboarding).
+  // Supported languages the user has not onboarded yet; picking one switches the
+  // target language directly (details can be filled in later via Profile).
   const practiced = new Set(practicedLanguages.map((row) => row.language))
   const supportedNotPracticed = SUPPORTED_LANGUAGES.filter((lang) => !practiced.has(lang.code))
 
@@ -88,7 +87,7 @@ export function Sidebar() {
         <DropdownMenuContent align="start" className="w-56">
           {/* GroupLabel requires a Group ancestor (Base UI contract). */}
           <DropdownMenuGroup>
-            <DropdownMenuLabel>Learning language</DropdownMenuLabel>
+            <DropdownMenuLabel>Target language</DropdownMenuLabel>
             {practicedLanguages.map((row) => (
               <DropdownMenuCheckboxItem
                 key={row.language}
@@ -110,12 +109,6 @@ export function Sidebar() {
               </DropdownMenuItem>
             ))}
           </DropdownMenuGroup>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={addLanguage}>
-            <PlusIcon className="size-4" />
-            Add language…
-            <DropdownMenuShortcut>Full setup</DropdownMenuShortcut>
-          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 

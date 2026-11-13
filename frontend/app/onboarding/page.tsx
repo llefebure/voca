@@ -47,8 +47,8 @@ export default function OnboardingPage() {
     if (!user) return
 
     try {
-      // `target_language` is the active-language pointer; the same wizard adds a new
-      // language later (sidebar "Add language…") — its row lands in user_languages.
+      // `target_language` is the target-language pointer; the same wizard (re)runs
+      // for a language (re)onboarding — its row lands in user_languages.
       await supabase.from('profiles').upsert({
         id: user.id,
         target_language: formData.target_language,
@@ -148,7 +148,7 @@ export default function OnboardingPage() {
               </div>
               <div className="space-y-5">
                 <div className="space-y-3">
-                  <Label>Language to learn</Label>
+                  <Label>Target language</Label>
                   <div className="grid grid-cols-2 gap-3">
                     {SUPPORTED_LANGUAGES.map((lang) => (
                       <Button

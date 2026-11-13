@@ -126,7 +126,7 @@ export default function ProfilePage() {
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground uppercase tracking-wider">Learning</Label>
+                <Label className="text-xs text-muted-foreground uppercase tracking-wider">Target language</Label>
                 <p className="text-2xl font-bold">{languageName(activeLanguage)}</p>
                 <p className="text-xs text-muted-foreground">Switch languages from the sidebar.</p>
               </div>

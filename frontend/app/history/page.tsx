@@ -23,7 +23,7 @@ export default function HistoryPage() {
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [loading, setLoading] = useState(true)
   const router = useRouter()
-  // History shows the active learning language's sessions (context from the sidebar
+  // History shows the target language's sessions (context from the sidebar
   // toggle); the backend falls back to everything when the param is absent.
   const { activeLanguage, loading: languageLoading } = useLanguage()
 
