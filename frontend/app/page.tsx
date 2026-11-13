@@ -98,7 +98,7 @@ export default function ChatPage() {
 
 function ChatPageLoading() {
   return (
-    <DashboardLayout title="AI Tutor">
+    <DashboardLayout title="Conversation Tutor">
       <div className="flex h-full items-center justify-center text-muted-foreground">Loading session…</div>
     </DashboardLayout>
   )
@@ -137,7 +137,7 @@ function ChatPageContent() {
   const targetLanguage = activeLanguage ?? DEFAULT_LANGUAGE
 
   return (
-    <DashboardLayout title="AI Tutor">
+    <DashboardLayout title="Conversation Tutor">
       {/* Keying on the language resets all chat state when the user toggles languages:
           the previous conversation stays open in History under its own language (the
           same semantics as "New session") — nothing is auto-resumed after a toggle.
@@ -161,6 +161,7 @@ function ChatView({
   const router = useRouter()
   const { muted, toggleMuted, speakingId, speak, stop } = useSpeech()
   const [input, setInput] = React.useState('')
+  const [submitting, setSubmitting] = React.useState(false)
   const [ending, setEnding] = React.useState(false)
   const [confirmEnd, setConfirmEnd] = React.useState(false)
   const [sessionId, setSessionId] = React.useState<string | null>(null)
@@ -168,6 +169,8 @@ function ChatView({
   const [planning, setPlanning] = React.useState(false)
   const sessionIdRef = React.useRef<string | null>(null)
   const lastSpokenRef = React.useRef<string | null>(null)
+  // Synchronous guard for Enter-key double submits: state alone can lag one render.
+  const submittingRef = React.useRef(false)
 
   const transport = React.useMemo(
     () =>
@@ -310,8 +313,15 @@ function ChatView({
 
   async function handleSubmit(event?: React.FormEvent) {
     event?.preventDefault()
+    // The first message awaits /sessions/start (+ lesson planning) before the
+    // transport flips `status` out of `ready` and the input clears, so `status`
+    // alone lets a second quick Enter double-submit (and could start a duplicate
+    // session). Flip the guard synchronously before that window opens.
+    if (submittingRef.current) return
     const text = input.trim()
     if (!text || status !== 'ready') return
+    submittingRef.current = true
+    setSubmitting(true)
     try {
       const activeSession = await activeSessionId()
       setInput('')
@@ -322,6 +332,9 @@ function ChatView({
         description: error instanceof Error ? error.message : 'Failed to start a session',
         type: 'error',
       })
+    } finally {
+      submittingRef.current = false
+      setSubmitting(false)
     }
   }
 
@@ -417,7 +430,7 @@ function ChatView({
               ? 'Planning your session…'
               : plan?.lesson
                 ? `Today's lesson: ${lessonTemplateName(plan.lesson.template)} — ${plan.lesson.topic}`
-                : 'Practice your conversation with the AI Tutor.'}
+                : 'Practice speaking with your conversation partner.'}
           </div>
         </div>
         <div className="flex items-center gap-1">
@@ -616,9 +629,9 @@ function ChatView({
             <InputGroupButton
               variant="default"
               onClick={() => handleSubmit()}
-              disabled={!input.trim() || status !== 'ready'}
+              disabled={!input.trim() || status !== 'ready' || submitting}
             >
-              {streaming ? <Spinner /> : <ArrowUpIcon />}
+              {streaming || submitting ? <Spinner /> : <ArrowUpIcon />}
             </InputGroupButton>
           </InputGroupAddon>
         </InputGroup>

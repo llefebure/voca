@@ -74,8 +74,8 @@ export function Sidebar() {
               render={
                 <button className="flex w-full min-w-0 items-center justify-between gap-2 rounded-md px-2 py-1 text-left cursor-pointer hover:bg-accent transition-colors">
                   <span className="flex flex-col min-w-0 leading-tight">
-                    <span className="text-xs text-muted-foreground truncate">Voca Tutor</span>
-                    <span className="font-semibold truncate">
+                    <span className="font-semibold truncate">Voca</span>
+                    <span className="text-xs text-muted-foreground truncate">
                       {activeLanguage ? languageName(activeLanguage) : "Loading…"}
                     </span>
                   </span>
