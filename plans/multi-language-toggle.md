@@ -219,7 +219,7 @@ post-session analysis) or stays open in history indefinitely.
 - [x] 3. Backend: `GET /sessions?language=` language param + language field on responses,
       `end_session` (session-language due cards, card stamps, post-session profile updates
       → `user_languages`).
-- [ ] 4. Backend tests for all the above.
+- [x] 4. Backend tests for all the above.
 - [ ] 5. Frontend: `language-context.tsx` provider + `DashboardLayout` wiring.
 - [ ] 6. Sidebar language dropdown (practiced / supported / upcoming / Add language…).
 - [ ] 7. Chat page: toggle-clear to a fresh page, `?session=` continue flow (verify
