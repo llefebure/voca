@@ -25,6 +25,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 from voca.agents.post_session_agent import post_session_agent
 from voca.agents.session_planner_agent import session_planner_agent
 from voca.agents.tutor_agent import TutorDeps, tutor_agent
+from voca.services.languages import DEFAULT_LANGUAGE
 from voca.services.llm import LLM_BASE_URL, ollama_model
 from voca.services.srs import (
     VOCA_RATING_MAP,
@@ -82,17 +83,40 @@ def fetch_profile_by(user_id: str) -> dict[str, Any]:
     return res.data or {}
 
 
-def fetch_due_cards(user_id: str) -> list[dict[str, Any]]:
-    """Cards that should be reviewed now: overdue, or brand-new (never scheduled)."""
-    now = datetime.now(UTC).isoformat()
+def fetch_effective_profile(user_id: str, language: str | None) -> dict[str, Any]:
+    """Profile + the learner context for `language`, ready as agent `user_profile` deps.
+
+    `target_language` is pinned to `language` (legacy rows without a stamp fall back to
+    the profile's active language) so agents always speak of the session's language, not
+    wherever the profile happens to point. The `user_languages` row's level/goals/
+    interests overlay the profile fields when present.
+    """
+    profile = fetch_profile_by(user_id)
+    effective_language = language or profile.get("target_language") or DEFAULT_LANGUAGE
     res = (
-        supabase.table("cards")
-        .select("*")
+        supabase.table("user_languages")
+        .select("level, goals, interests")
         .eq("user_id", user_id)
-        .or_(f"next_review.lte.{now},next_review.is.null")
+        .eq("language", effective_language)
+        .maybe_single()
         .execute()
     )
-    return res.data or {}
+    row = res.data or {}
+    effective = {**profile, "target_language": effective_language}
+    for field in ("level", "goals", "interests"):
+        if row.get(field):
+            effective[field] = row[field]
+    return effective
+
+
+def fetch_due_cards(user_id: str, language: str | None = None) -> list[dict[str, Any]]:
+    """Cards due now (overdue or brand-new), optionally scoped to one language."""
+    now = datetime.now(UTC).isoformat()
+    query = supabase.table("cards").select("*").eq("user_id", user_id)
+    if language:
+        query = query.eq("language", language)
+    res = query.or_(f"next_review.lte.{now},next_review.is.null").execute()
+    return res.data or []
 
 
 def compact_cards(rows: list[dict[str, Any]]) -> list[dict[str, str | None]]:
@@ -141,6 +165,7 @@ class SessionResponse(BaseModel):
     created_at: str | None = None
     end_time: str | None = None
     recap: dict | None = None
+    language: str | None = None
 
 
 class SessionListResponse(BaseModel):
@@ -205,10 +230,11 @@ async def ollama_health():
 
 
 @app.get("/sessions", response_model=SessionListResponse)
-async def list_sessions(user=Depends(get_current_user)):
-    res = await db(
-        supabase.table("sessions").select("*").eq("user_id", user.id).order("created_at", desc=True)
-    )
+async def list_sessions(user=Depends(get_current_user), language: str | None = None):
+    query = supabase.table("sessions").select("*").eq("user_id", user.id)
+    if language:
+        query = query.eq("language", language)
+    res = await db(query.order("created_at", desc=True))
     return SessionListResponse(
         sessions=[
             SessionResponse(
@@ -217,6 +243,7 @@ async def list_sessions(user=Depends(get_current_user)):
                 created_at=session.get("created_at"),
                 end_time=session.get("end_time"),
                 recap=session.get("recap"),
+                language=session.get("language"),
             )
             for session in (res.data or [])
         ]
@@ -225,11 +252,29 @@ async def list_sessions(user=Depends(get_current_user)):
 
 @app.post("/sessions/start", response_model=SessionResponse)
 async def start_session(user=Depends(get_current_user)):
-    res = await db(supabase.table("sessions").insert({"user_id": user.id, "status": "active"}))
+    profile = await asyncio.to_thread(fetch_profile_by, user.id)
+    language = (profile or {}).get("target_language") or DEFAULT_LANGUAGE
+    res = await db(
+        supabase.table("sessions").insert(
+            {"user_id": user.id, "status": "active", "language": language}
+        )
+    )
     if not res.data:
         raise HTTPException(status_code=500, detail="Failed to create session")
     session = res.data[0]
-    return SessionResponse(session_id=session["id"], status=session["status"])
+    now = datetime.now(UTC).isoformat()
+    # Practice stamps "latest practiced" in two places: the user_languages row
+    # (drives the practiced-languages dropdown ordering) and the profile pointer
+    # (what the user lands on for their next login).
+    await db(
+        supabase.table("user_languages").upsert(
+            {"user_id": user.id, "language": language, "last_practiced_at": now}
+        )
+    )
+    await db(supabase.table("profiles").update({"target_language": language}).eq("id", user.id))
+    return SessionResponse(
+        session_id=session["id"], status=session["status"], language=session.get("language")
+    )
 
 
 @app.post("/sessions/plan")
@@ -238,11 +283,11 @@ async def plan_session(session_id: str, user=Depends(get_current_user)):
     if session["status"] != "active":
         raise HTTPException(status_code=409, detail="Session has already ended")
 
+    session_language = session.get("language")
     profile, due_cards = await asyncio.gather(
-        asyncio.to_thread(fetch_profile_by, user.id),
-        asyncio.to_thread(fetch_due_cards, user.id),
+        asyncio.to_thread(fetch_effective_profile, user.id, session_language),
+        asyncio.to_thread(fetch_due_cards, user.id, session_language),
     )
-    profile = profile or {}
 
     result = await session_planner_agent.run(
         "Plan the session.",
@@ -278,10 +323,8 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
         .eq("session_id", session["id"])
         .order("created_at")
     )
-    profile, due_cards = await asyncio.gather(
-        asyncio.to_thread(fetch_profile_by, user.id),
-        asyncio.to_thread(fetch_due_cards, user.id),
-    )
+    language = session.get("language")
+    due_cards = await asyncio.to_thread(fetch_due_cards, user.id, language)
 
     result = await post_session_agent.run(
         "Analyze the session and generate cards and recap.",
@@ -290,7 +333,7 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
             "session_id": session["id"],
             "transcript": transcript.data or [],
             "due_cards": compact_cards(due_cards),
-            "target_language": (profile or {}).get("target_language"),
+            "target_language": language,
             "session_plan": session.get("plan"),
         },
     )
@@ -312,6 +355,8 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
                         "front": card.front,
                         "back": card.back,
                         "source_sentence": card.source_sentence,
+                        # The card belongs to the session's language.
+                        "language": language,
                         # `state` is a plain label; the FSRS schedule lives in `fsrs_data`.
                         "state": "new",
                         "fsrs_data": new_card_state(),
@@ -353,7 +398,12 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
 
     profile_updates = analysis.profile_updates.model_dump(exclude_none=True)
     if profile_updates:
-        await db(supabase.table("profiles").update(profile_updates).eq("id", user.id))
+        # Per-language details (level/goals/interests) live in user_languages.
+        await db(
+            supabase.table("user_languages").upsert(
+                {"user_id": user.id, "language": language, **profile_updates}
+            )
+        )
 
     recap = analysis.recap.model_dump()
     # Words the learner actually produced this session — real data, unlike the
@@ -387,7 +437,7 @@ async def chat(request: ChatRequest, user=Depends(get_current_user)):
     session = get_owned_session(request.session_id, user.id)
     if session["status"] != "active":
         raise HTTPException(status_code=409, detail="Session has already ended")
-    profile = await asyncio.to_thread(fetch_profile_by, user.id)
+    profile = await asyncio.to_thread(fetch_effective_profile, user.id, session.get("language"))
 
     # Record the user's turn before responding so a mid-stream failure cannot lose it.
     await asyncio.to_thread(insert_transcript, session["id"], "user", request.message)

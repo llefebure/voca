@@ -9,12 +9,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useRouter } from 'next/navigation'
 import { Target, Settings, BookOpen, Save, X, TrendingUp } from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
+import { useLanguage } from '@/components/language-context'
 import { toast } from '@/components/ui/toast'
-import {
-  SUPPORTED_LANGUAGES,
-  UPCOMING_LANGUAGES,
-  languageName,
-} from '@/lib/languages'
+import { languageName } from '@/lib/languages'
 
 type ProfileFields = {
   target_language?: string
@@ -26,9 +23,13 @@ type ProfileFields = {
 export default function ProfilePage() {
   const [profile, setProfile] = useState<ProfileFields | null>(null)
   const [isEditing, setIsEditing] = useState(false)
-  const [editedProfile, setEditedProfile] = useState<ProfileFields>({})
+  const [edited, setEdited] = useState<{ level?: string; goals?: string; interests?: string }>({})
   const [loading, setLoading] = useState(true)
   const router = useRouter()
+  // The profile page shows and edits the *active language's* learner details
+  // (level/goals/interests live per language in user_languages). Switching languages
+  // happens in the sidebar dropdown.
+  const { activeLanguage, practicedLanguages, refresh: refreshLanguages } = useLanguage()
 
   useEffect(() => {
     const fetchProfile = async () => {
@@ -46,7 +47,6 @@ export default function ProfilePage() {
           .single()
 
         setProfile(data)
-        setEditedProfile(data)
       } catch (error) {
         console.error('Error fetching profile:', error)
       } finally {
@@ -56,15 +56,37 @@ export default function ProfilePage() {
     fetchProfile()
   }, [router])
 
+  // Learner details for the active language: its user_languages row if onboarded,
+  // otherwise the legacy profile fields (pre-multi-language data).
+  const activeRow = practicedLanguages.find((row) => row.language === activeLanguage)
+  const level = activeRow?.level ?? profile?.level ?? null
+  const goals = activeRow?.goals ?? profile?.goals ?? null
+  const interests = activeRow?.interests ?? profile?.interests ?? null
+
+  const startEditing = () => {
+    setEdited({ level: level ?? undefined, goals: goals ?? undefined, interests: interests ?? undefined })
+    setIsEditing(true)
+  }
+
   const handleSave = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      await supabase.from('profiles').update(editedProfile).eq('id', user?.id)
-      setProfile(editedProfile)
+      if (!user || !activeLanguage) throw new Error('Signed out')
+      // Per-language details upsert the user_languages row for the active language;
+      // last_practiced_at is intentionally not included (never reset by edit).
+      const { error } = await supabase.from('user_languages').upsert({
+        user_id: user.id,
+        language: activeLanguage,
+        level: edited.level ?? null,
+        goals: edited.goals ?? null,
+        interests: edited.interests ?? null,
+      })
+      if (error) throw error
+      await refreshLanguages()
       setIsEditing(false)
       toast({
         title: "Profile Updated",
-        description: "Your learning profile has been saved.",
+        description: `Your ${languageName(activeLanguage)} learning profile has been saved.`,
         type: "success",
       })
     } catch {
@@ -104,17 +126,18 @@ export default function ProfilePage() {
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="space-y-2">
-                <Label className="text-xs text-muted-foreground uppercase tracking-wider">Learning</Label>
-                <p className="text-2xl font-bold">{languageName(profile?.target_language)}</p>
+                <Label className="text-xs text-muted-foreground uppercase tracking-wider">Target language</Label>
+                <p className="text-2xl font-bold">{languageName(activeLanguage)}</p>
+                <p className="text-xs text-muted-foreground">Switch languages from the sidebar.</p>
               </div>
               <div className="space-y-2">
                 <Label className="text-xs text-muted-foreground uppercase tracking-wider">Current Level</Label>
-                <p className="text-2xl font-bold">{profile?.level || 'Not set'}</p>
+                <p className="text-2xl font-bold">{level || 'Not set'}</p>
               </div>
               <Button 
                 className="w-full rounded-lg" 
                 variant={isEditing ? 'outline' : 'default'} 
-                onClick={() => setIsEditing(!isEditing)}
+                onClick={() => (isEditing ? setIsEditing(false) : startEditing())}
               >
                 {isEditing ? (
                   <span className="flex items-center gap-2"><X className="h-4 w-4" /> Cancel</span>
@@ -129,28 +152,22 @@ export default function ProfilePage() {
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
                 <Target className="h-5 w-5 text-muted-foreground" />
-                Learning Goals & Interests
+                {languageName(activeLanguage)} Goals &amp; Interests
               </CardTitle>
             </CardHeader>
             <CardContent>
               {isEditing ? (
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label>Learning language</Label>
+                    <Label>Level</Label>
                     <div className="grid grid-cols-2 gap-2">
-                      {SUPPORTED_LANGUAGES.map((lang) => (
+                      {['A2', 'B1', 'B2', 'C1'].map((lvl) => (
                         <Button
-                          key={lang.code}
-                          variant={editedProfile.target_language === lang.code ? 'default' : 'outline'}
-                          onClick={() => setEditedProfile({...editedProfile, target_language: lang.code})}
+                          key={lvl}
+                          variant={edited.level === lvl ? 'default' : 'outline'}
+                          onClick={() => setEdited({ ...edited, level: lvl })}
                         >
-                          {lang.name}
-                        </Button>
-                      ))}
-                      {UPCOMING_LANGUAGES.map((name) => (
-                        <Button key={name} variant="outline" disabled>
-                          {name}
-                          <span className="ml-1 text-xs text-muted-foreground">Soon</span>
+                          {lvl}
                         </Button>
                       ))}
                     </div>
@@ -158,16 +175,16 @@ export default function ProfilePage() {
                   <div className="space-y-2">
                     <Label>Goals</Label>
                     <Input 
-                      value={editedProfile.goals} 
-                      onChange={(e) => setEditedProfile({...editedProfile, goals: e.target.value})} 
+                      value={edited.goals ?? ''} 
+                      onChange={(e) => setEdited({ ...edited, goals: e.target.value })} 
                       className="rounded-lg"
                     />
                   </div>
                   <div className="space-y-2">
                     <Label>Interests</Label>
                     <Input 
-                      value={editedProfile.interests} 
-                      onChange={(e) => setEditedProfile({...editedProfile, interests: e.target.value})} 
+                      value={edited.interests ?? ''} 
+                      onChange={(e) => setEdited({ ...edited, interests: e.target.value })} 
                       className="rounded-lg"
                     />
                   </div>
@@ -179,11 +196,11 @@ export default function ProfilePage() {
                 <div className="grid gap-6">
                   <div className="space-y-2">
                     <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">My Goals</p>
-                    <p className="text-foreground leading-relaxed">{profile?.goals || 'No goals set yet.'}</p>
+                    <p className="text-foreground leading-relaxed">{goals || 'No goals set yet.'}</p>
                   </div>
                   <div className="space-y-2">
                     <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">Interests</p>
-                    <p className="text-foreground leading-relaxed">{profile?.interests || 'No interests set yet.'}</p>
+                    <p className="text-foreground leading-relaxed">{interests || 'No interests set yet.'}</p>
                   </div>
                 </div>
               )}

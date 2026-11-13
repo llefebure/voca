@@ -15,6 +15,8 @@ export function DashboardLayout({
   title?: string
 }) {
   return (
+    // The LanguageProvider lives in the root layout (app/layout.tsx) so pages can
+    // read it above their own DashboardLayout.
     <div className="flex h-screen w-full overflow-hidden">
       {/* Sidebar reads usePathname (runtime data); the Suspense boundary lets this
           layout prerender a static shell with a placeholder sidebar. */}

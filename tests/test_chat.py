@@ -93,6 +93,38 @@ async def test_chat_rejects_ended_sessions(client, fake_supabase):
 
 
 @pytest.mark.asyncio
+async def test_chat_passes_effective_profile_to_tutor(client, monkeypatch, fake_supabase):
+    """The tutor sees the session language + the user_languages overlay, not the raw profile."""
+    fake_supabase.results[("sessions", "select")] = [
+        {"id": "sess-1", "user_id": "user-1", "status": "active", "language": "fr"}
+    ]
+    fake_supabase.results[("profiles", "select")] = [
+        {"id": "user-1", "level": "A2", "goals": "global"}
+    ]
+    fake_supabase.results[("user_languages", "select")] = [
+        {"level": "B1", "goals": "fr goals"}
+    ]
+    captured: dict[str, Any] = {}
+
+    class CapturingTutor(FakeTutorAgent):
+        @contextlib.asynccontextmanager
+        async def run_stream(self, _prompt, deps=None, **_kwargs):
+            captured["deps"] = deps
+            yield FakeStreamResult(["OK"])
+
+    monkeypatch.setattr(voca_main, "tutor_agent", CapturingTutor([]))
+
+    response = await client.post(
+        "/chat", json={"message": "bonjour", "session_id": "sess-1"}, headers=AUTH
+    )
+    assert response.status_code == 200
+    deps = captured["deps"]["user_profile"]
+    assert deps["target_language"] == "fr"  # pinned to the session language
+    assert deps["level"] == "B1"  # overlaid from user_languages
+    assert deps["goals"] == "fr goals"
+
+
+@pytest.mark.asyncio
 async def test_chat_streams_json_frames(client, monkeypatch, fake_supabase):
     """Every SSE frame is a single-line JSON object; deltas keep their newlines."""
     fake_supabase.results[("sessions", "select")] = [active_session_response()]

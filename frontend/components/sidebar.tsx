@@ -3,18 +3,22 @@
 import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { 
-  MessageSquare, 
-  History, 
-  BookOpen, 
-  User, 
-  ChevronLeft, 
+import {
+  MessageSquare,
+  History,
+  BookOpen,
+  User,
+  ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Languages,
-  LogOut
+  LogOut,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem, DropdownMenuItem, DropdownMenuGroup, DropdownMenuLabel } from "@/components/ui/dropdown-menu"
+import { useLanguage } from "@/components/language-context"
+import { SUPPORTED_LANGUAGES, languageName } from "@/lib/languages"
 import { supabase } from "@/lib/supabase"
 import { useRouter } from "next/navigation"
 
@@ -29,6 +33,13 @@ export function Sidebar() {
   const [isCollapsed, setIsCollapsed] = React.useState(false)
   const pathname = usePathname()
   const router = useRouter()
+  const { activeLanguage, practicedLanguages, toggleLanguage } = useLanguage()
+
+  // The dropdown lists languages the user has actually added. Supported languages
+  // without a row yet (e.g. the active one after pre-migration onboarding) stay
+  // selectable; upcoming languages are only shown in the onboarding wizard.
+  const practiced = new Set(practicedLanguages.map((row) => row.language))
+  const supportedNotPracticed = SUPPORTED_LANGUAGES.filter((lang) => !practiced.has(lang.code))
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
@@ -42,14 +53,59 @@ export function Sidebar() {
         isCollapsed ? "w-16" : "w-64"
       )}
     >
-      <div className="p-4 flex items-center gap-3 overflow-hidden">
-        <div className="bg-primary p-2 rounded-lg shrink-0">
-          <Languages className="h-5 w-5 text-primary-foreground" />
+      {/* Language switcher: the header itself. Collapsed, the logo is the trigger. */}
+      <DropdownMenu>
+        <div className="p-4 flex items-center gap-3 overflow-hidden">
+          {isCollapsed ? (
+            <DropdownMenuTrigger
+              render={
+                <button className="bg-primary p-2 rounded-lg shrink-0 text-primary-foreground cursor-pointer hover:bg-primary/90 transition-colors">
+                  <Languages className="size-5" />
+                </button>
+              }
+            />
+          ) : (
+            <div className="bg-primary p-2 rounded-lg shrink-0">
+              <Languages className="size-5 text-primary-foreground" />
+            </div>
+          )}
+          {!isCollapsed && (
+            <DropdownMenuTrigger
+              render={
+                <button className="flex w-full min-w-0 items-center justify-between gap-2 rounded-md px-2 py-1 text-left cursor-pointer hover:bg-accent transition-colors">
+                  <span className="flex flex-col min-w-0 leading-tight">
+                    <span className="text-xs text-muted-foreground truncate">Voca Tutor</span>
+                    <span className="font-semibold truncate">
+                      {activeLanguage ? languageName(activeLanguage) : "Loading…"}
+                    </span>
+                  </span>
+                  <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+                </button>
+              }
+            />
+          )}
         </div>
-        {!isCollapsed && (
-          <span className="font-bold text-xl truncate">Voca Tutor</span>
-        )}
-      </div>
+        <DropdownMenuContent align="start" className="w-56">
+          {/* GroupLabel requires a Group ancestor (Base UI contract). */}
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Target language</DropdownMenuLabel>
+            {practicedLanguages.map((row) => (
+              <DropdownMenuCheckboxItem
+                key={row.language}
+                checked={row.language === activeLanguage}
+                onSelect={() => void toggleLanguage(row.language)}
+              >
+                {languageName(row.language)}
+              </DropdownMenuCheckboxItem>
+            ))}
+            {supportedNotPracticed.map((lang) => (
+              <DropdownMenuItem key={lang.code} onSelect={() => void toggleLanguage(lang.code)}>
+                {lang.name}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <nav className="flex-1 px-2 space-y-1 py-4">
         {navItems.map((item) => {

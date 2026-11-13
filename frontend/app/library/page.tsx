@@ -9,6 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { useRouter } from 'next/navigation'
 import { Search, BookOpen, GraduationCap, Trash2 } from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
+import { useLanguage } from '@/components/language-context'
 import { toast } from '@/components/ui/toast'
 
 type CardRow = {
@@ -24,8 +25,11 @@ export default function LibraryPage() {
   const [filter, setFilter] = useState('')
   const [loading, setLoading] = useState(true)
   const router = useRouter()
+  // Cards belong to their session's language; the library shows the active one.
+  const { activeLanguage, loading: languageLoading } = useLanguage()
 
   useEffect(() => {
+    if (languageLoading || !activeLanguage) return
     const fetchCards = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser()
@@ -38,6 +42,7 @@ export default function LibraryPage() {
           .from('cards')
           .select('*')
           .eq('user_id', user.id)
+          .eq('language', activeLanguage)
           .order('created_at', { ascending: false })
 
         if (error) throw error
@@ -49,7 +54,7 @@ export default function LibraryPage() {
       }
     }
     fetchCards()
-  }, [router])
+  }, [router, activeLanguage, languageLoading])
 
   const filteredCards = cards.filter(card => 
     card.front.toLowerCase().includes(filter.toLowerCase()) || 
