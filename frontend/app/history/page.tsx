@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useRouter } from 'next/navigation'
-import { Calendar, ArrowRight, Clock } from 'lucide-react'
+import { Calendar, ArrowRight, Clock, FileText } from 'lucide-react'
 import { format } from 'date-fns'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { cn } from '@/lib/utils'
@@ -102,15 +102,26 @@ export default function HistoryPage() {
                       </span>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button 
-                        variant="ghost" 
-                        size="sm"
-                        className="flex items-center gap-2 text-primary hover:text-primary-foreground hover:bg-primary"
-                        onClick={() => router.push(`/recap/${session.session_id}`)}
-                      >
-                        View Recap
-                        <ArrowRight className="h-3 w-3" />
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex items-center gap-2 text-muted-foreground hover:bg-primary hover:text-primary-foreground"
+                          onClick={() => router.push(`/history/${session.session_id}`)}
+                        >
+                          View Transcript <FileText className="h-3 w-3" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={!session.recap}
+                          className="flex items-center gap-2 text-primary hover:text-primary-foreground hover:bg-primary"
+                          onClick={() => router.push(`/recap/${session.session_id}`)}
+                        >
+                          View Recap
+                          <ArrowRight className="h-3 w-3" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

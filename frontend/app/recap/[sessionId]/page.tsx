@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, use } from 'react'
+import { useState, useEffect, use, Suspense } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,11 +10,10 @@ import { CheckCircle, XCircle, BookOpen, ArrowRight, TrendingUp, Target } from '
 import { DashboardLayout } from '@/components/dashboard-layout'
 
 type RecapData = {
-  time_spoken?: string
-  lesson_completed?: boolean
   positives?: string[]
   key_corrections?: string[]
   next_time_preview?: string
+  user_word_count?: number
 }
 
 type CardRow = {
@@ -26,6 +25,26 @@ type CardRow = {
 }
 
 export default function RecapPage({ params }: { params: Promise<{ sessionId: string }> }) {
+  // The params promise is only unwrapped inside <Suspense> (RecapContent), so the
+  // route can prerender a static shell in Next 16 (cache-components validation).
+  return (
+    <Suspense fallback={<RecapLoading />}>
+      <RecapContent params={params} />
+    </Suspense>
+  )
+}
+
+function RecapLoading() {
+  return (
+    <DashboardLayout title="Session Recap">
+      <div className="flex h-full items-center justify-center text-muted-foreground">
+        Loading your session analysis...
+      </div>
+    </DashboardLayout>
+  )
+}
+
+function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = use(params)
   const [recap, setRecap] = useState<RecapData | null>(null)
   const [cards, setCards] = useState<CardRow[]>([])
@@ -95,15 +114,10 @@ export default function RecapPage({ params }: { params: Promise<{ sessionId: str
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="rounded-xl bg-muted/50 p-4 text-center border">
-                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Time Spoken</p>
-                <p className="text-2xl font-bold">{recap.time_spoken || 'N/A'}</p>
-              </div>
-              <div className="rounded-xl bg-muted/50 p-4 text-center border">
-                <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Lesson Status</p>
-                <p className="text-2xl font-bold">{recap.lesson_completed ? 'Completed' : 'In Progress'}</p>
-              </div>
+            <div className="rounded-xl bg-muted/50 p-4 text-center border">
+              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Words You Spoke</p>
+              <p className="text-3xl font-bold">{(recap.user_word_count ?? 0).toLocaleString()}</p>
+              <p className="text-xs text-muted-foreground">Counted from your messages this session</p>
             </div>
 
             <div className="grid gap-6">

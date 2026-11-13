@@ -16,6 +16,11 @@ import {
 
 import { supabase } from '@/lib/supabase'
 import { BACKEND_URL } from '@/lib/api'
+import {
+  DEFAULT_LANGUAGE,
+  languageName,
+  lessonTemplateName,
+} from '@/lib/languages'
 import { useSpeech } from '@/lib/use-speech'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { Markdown } from '@/components/markdown'
@@ -67,6 +72,18 @@ const TUTOR_AVATAR = (
   </Avatar>
 )
 
+/** The enriched session plan as stored by POST /sessions/plan. */
+type VocaSessionPlan = {
+  lesson?: {
+    template?: string
+    topic?: string
+    scenario?: string | null
+    objectives?: string[]
+  }
+  opening_hook?: string
+  cards?: { id: string; front: string; back: string }[]
+}
+
 export default function ChatPage() {
   const router = useRouter()
   const { muted, toggleMuted, speakingId, speak, stop } = useSpeech()
@@ -74,6 +91,9 @@ export default function ChatPage() {
   const [ending, setEnding] = React.useState(false)
   const [confirmEnd, setConfirmEnd] = React.useState(false)
   const [sessionId, setSessionId] = React.useState<string | null>(null)
+  const [targetLanguage, setTargetLanguage] = React.useState<string | null>(null)
+  const [plan, setPlan] = React.useState<VocaSessionPlan | null>(null)
+  const [planning, setPlanning] = React.useState(false)
   const sessionIdRef = React.useRef<string | null>(null)
   const lastSpokenRef = React.useRef<string | null>(null)
 
@@ -89,12 +109,14 @@ export default function ChatPage() {
       }
       const { data: profile } = await supabase
         .from('profiles')
-        .select('id')
+        .select('id, target_language')
         .eq('id', user.id)
         .maybeSingle()
       if (!profile) {
         router.push('/onboarding')
+        return
       }
+      setTargetLanguage(profile.target_language ?? DEFAULT_LANGUAGE)
     }
     checkUser()
   }, [router])
@@ -132,6 +154,32 @@ export default function ChatPage() {
 
   const streaming = status === 'streaming' || status === 'submitted'
 
+  /** Generate the session's lesson plan; best-effort, surfaced in the header. */
+  async function planSession(id: string) {
+    setPlanning(true)
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const response = await fetch(
+        `${BACKEND_URL}/sessions/plan?session_id=${encodeURIComponent(id)}`,
+        { method: 'POST', headers: { Authorization: `Bearer ${session?.access_token}` } },
+      )
+      if (!response.ok) throw new Error(String(response.status))
+      setPlan((await response.json()) as VocaSessionPlan)
+    } catch {
+      // Planning is best-effort; the tutor still works without a plan.
+      setPlan(null)
+      toast({
+        title: 'Planning unavailable',
+        description: 'Could not plan this session — starting without a lesson plan.',
+        type: 'error',
+      })
+    } finally {
+      setPlanning(false)
+    }
+  }
+
   /** Reuse or lazily create the session the conversation belongs to. Event-time only. */
   async function activeSessionId(): Promise<string> {
     const cached = sessionIdRef.current
@@ -150,6 +198,8 @@ export default function ChatPage() {
     const data = (await response.json()) as { session_id: string }
     sessionIdRef.current = data.session_id
     setSessionId(data.session_id)
+    // Plan the lesson right after the session starts so the tutor greets with it.
+    await planSession(data.session_id)
     return data.session_id
   }
 
@@ -182,8 +232,8 @@ export default function ChatPage() {
       .join('')
     if (!text.trim()) return
     lastSpokenRef.current = last.id
-    void speak(last.id, text)
-  }, [messages, muted, speak, status])
+    void speak(last.id, text, targetLanguage ?? undefined)
+  }, [messages, muted, speak, status, targetLanguage])
 
   function handleTranslate(text: string) {
     void (async () => {
@@ -191,7 +241,7 @@ export default function ChatPage() {
         const response = await fetch(`${BACKEND_URL}/translate`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, source_lang: 'es', target_lang: 'en' }),
+          body: JSON.stringify({ text, source_lang: targetLanguage ?? DEFAULT_LANGUAGE, target_lang: 'en' }),
         })
         if (!response.ok) throw new Error('Translation failed')
         const data = (await response.json()) as { translation: string }
@@ -210,6 +260,7 @@ export default function ChatPage() {
     stop()
     sessionIdRef.current = null
     lastSpokenRef.current = null
+    setPlan(null)
     setMessages([])
   }
 
@@ -227,9 +278,18 @@ export default function ChatPage() {
           `${BACKEND_URL}/sessions/end?session_id=${encodeURIComponent(sessionId)}`,
           { method: 'POST', headers: { Authorization: `Bearer ${session?.access_token}` } },
         )
-        if (!response.ok) throw new Error('Failed to end the session')
+        // 409 means the session was already ended (e.g. double click) — treat it
+        // as success and still clear the page.
+        if (!response.ok && response.status !== 409) {
+          throw new Error('Failed to end the session')
+        }
+        // Archive locally: the chat screen must be blank from the moment of
+        // ending — before, during, and regardless of how the redirect goes.
         sessionIdRef.current = null
         lastSpokenRef.current = null
+        setPlan(null)
+        setMessages([])
+        setInput('')
         router.push(`/recap/${sessionId}`)
       } catch (error) {
         toast({
@@ -248,9 +308,13 @@ export default function ChatPage() {
       <div className="relative flex h-full w-full flex-col">
         <div className="flex items-start justify-between gap-4 px-8 pt-6 pb-4">
           <div className="flex flex-col gap-1">
-            <div className="font-medium">Spanish Session</div>
+            <div className="font-medium">{languageName(targetLanguage)} Session</div>
             <div className="text-sm text-muted-foreground">
-              Practice your conversation with the AI Tutor.
+              {planning
+                ? 'Planning your session…'
+                : plan?.lesson
+                  ? `Today's lesson: ${lessonTemplateName(plan.lesson.template)} — ${plan.lesson.topic}`
+                  : 'Practice your conversation with the AI Tutor.'}
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -301,7 +365,7 @@ export default function ChatPage() {
                 </EmptyMedia>
                 <EmptyTitle>Ready to practice?</EmptyTitle>
                 <EmptyDescription>
-                  Start a conversation in Spanish to improve your fluency.
+                  Start a conversation in {languageName(targetLanguage)} to improve your fluency.
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
@@ -375,7 +439,7 @@ export default function ChatPage() {
                                           <Button
                                             variant="ghost"
                                             size="icon-xs"
-                                            onClick={() => void speak(message.id, text)}
+                                            onClick={() => void speak(message.id, text, targetLanguage ?? undefined)}
                                           >
                                             <Volume2Icon />
                                           </Button>
@@ -399,7 +463,7 @@ export default function ChatPage() {
                             <MessageHeader>Voca</MessageHeader>
                             <Bubble variant="muted" align="start">
                               <BubbleContent>
-                                <span className="shimmer">Pensando…</span>
+                                <span className="shimmer">Thinking…</span>
                               </BubbleContent>
                             </Bubble>
                           </MessageContent>
@@ -426,7 +490,7 @@ export default function ChatPage() {
                   handleSubmit()
                 }
               }}
-              placeholder="Type your message in Spanish…"
+              placeholder={`Type your message in ${languageName(targetLanguage)}…`}
               aria-label="Message"
               className="min-h-7"
               rows={1}

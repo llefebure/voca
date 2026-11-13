@@ -19,7 +19,8 @@ from voca.agents.session_planner_agent import (
     SessionPlan,
     session_planner_agent,
 )
-from voca.agents.tutor_agent import TutorDeps, spanish_tutor, tutor_system_prompt
+from voca.agents.tutor_agent import TutorDeps, tutor_agent, tutor_system_prompt
+from voca.services.lesson_templates import LESSON_TEMPLATES
 
 
 class _StubRunContext:
@@ -56,18 +57,63 @@ def test_tutor_system_prompt_defaults_without_profile():
     assert "Intermediate (B1)" in prompt
 
 
+def test_tutor_system_prompt_uses_profile_language():
+    deps: TutorDeps = {"user_id": "u", "user_profile": {"target_language": "es"}, "session_id": "s"}
+    prompt = tutor_system_prompt(_StubRunContext(deps))
+    assert "Spanish language tutor" in prompt
+
+    deps_unknown: TutorDeps = {
+        "user_id": "u",
+        "user_profile": {"target_language": "xx"},
+        "session_id": "s",
+    }
+    fallback = tutor_system_prompt(_StubRunContext(deps_unknown))
+    assert "Spanish language tutor" in fallback
+
+
+def test_tutor_system_prompt_renders_session_plan():
+    deps: TutorDeps = {
+        "user_id": "user-1",
+        "user_profile": {"target_language": "es"},
+        "session_id": "session-1",
+        "session_plan": {
+            "lesson": {
+                "template": "role_play",
+                "topic": "At the pharmacy",
+                "scenario": "Pharmacist and customer",
+                "objectives": ["describe symptoms", "ask for a recommendation"],
+            },
+            "opening_hook": "¡Hola Alex!",
+            "cards": [{"id": "c1", "front": "exhausted", "back": "agotado"}],
+        },
+    }
+    prompt = tutor_system_prompt(_StubRunContext(deps))
+    assert "TODAY'S LESSON" in prompt
+    assert "Role Play" in prompt
+    assert "At the pharmacy" in prompt
+    assert "Pharmacist and customer" in prompt
+    assert "describe symptoms" in prompt
+    assert "¡Hola Alex!" in prompt
+    assert "exhausted → agotado" in prompt
+
+
+def test_tutor_system_prompt_without_plan_stays_simple():
+    prompt = tutor_system_prompt(_StubRunContext(dict(TUTOR_DEPS)))
+    assert "TODAY'S LESSON" not in prompt
+
+
 @pytest.mark.asyncio
 async def test_tutor_agent_output_is_plain_text():
     """After the phase-removal refactor the tutor returns text, not a model."""
-    with spanish_tutor.override(model=TestModel()):
-        result = await spanish_tutor.run("¡Hola!", deps=TUTOR_DEPS)
+    with tutor_agent.override(model=TestModel()):
+        result = await tutor_agent.run("¡Hola!", deps=TUTOR_DEPS)
     assert isinstance(result.output, str)
 
 
 @pytest.mark.asyncio
 async def test_tutor_agent_sends_profile_in_request():
-    with capture_run_messages() as messages_log, spanish_tutor.override(model=TestModel()):
-        await spanish_tutor.run("¡Hola!", deps=TUTOR_DEPS)
+    with capture_run_messages() as messages_log, tutor_agent.override(model=TestModel()):
+        await tutor_agent.run("¡Hola!", deps=TUTOR_DEPS)
     prompt_parts = [part for message in messages_log for part in message.parts]
     user_parts = [part for part in prompt_parts if part.part_kind == "user-prompt"]
     assert any("¡Hola!" in str(part) for part in user_parts)
@@ -84,11 +130,35 @@ def test_post_session_agent_shapes_transcript_and_cards():
             {"speaker": "user", "text": "¿Cómo se dice 'I am exhausted'?"},
             {"speaker": "tutor", "text": "Se dice 'estoy agotado'."},
         ],
-        "due_cards": [{"front": "exhausted", "back": "agotado"}],
+        "due_cards": [{"id": "card-1", "front": "exhausted", "back": "agotado"}],
     }
     injected = inject_post_session_deps(_StubRunContext(deps))
     assert "estoy agotado" in injected
-    assert "exhausted" in injected
+    assert "card-1" in injected
+    assert "SESSION PLAN: " in injected  # absent plan renders as a placeholder
+
+
+def test_post_session_agent_injects_plan():
+    from voca.agents.post_session_agent import inject_post_session_deps
+
+    deps: PostSessionDeps = {
+        "user_id": "user-1",
+        "session_id": "session-1",
+        "transcript": [],
+        "due_cards": [],
+        "target_language": "es",
+        "session_plan": {
+            "lesson": {
+                "template": "reading_comprehension",
+                "topic": "A trip to the market",
+                "objectives": ["literal recall", "inference"],
+            }
+        },
+    }
+    injected = inject_post_session_deps(_StubRunContext(deps))
+    assert "reading_comprehension" in injected
+    assert "A trip to the market" in injected
+    assert "literal recall" in injected
 
 
 @pytest.mark.asyncio
@@ -106,6 +176,22 @@ async def test_session_planner_output_schema():
     assert isinstance(result.output, SessionPlan)
 
 
+def test_planner_instructions_inject_templates_and_compact_cards():
+    from voca.agents.session_planner_agent import inject_planner_deps
+
+    injected = inject_planner_deps(_StubRunContext(_planner_deps()))
+    for template in LESSON_TEMPLATES:
+        assert template["id"] in injected
+    assert "[card-1] Revenue" in injected
+    # No lesson bank: templates, not DB lessons, get injected.
+    assert "AVAILABLE LESSONS" not in injected
+
+
+def test_lesson_templates_cover_the_catalog():
+    ids = {template["id"] for template in LESSON_TEMPLATES}
+    assert ids == {"role_play", "reading_comprehension", "free_conversation"}
+
+
 def _analyst_deps() -> PostSessionDeps:
     return {
         "user_id": "user-1",
@@ -119,8 +205,5 @@ def _planner_deps() -> PlannerDeps:
     return {
         "user_id": "user-1",
         "user_profile": {"goals": "business Spanish", "level": "B1", "interests": "finance"},
-        "due_cards": [{"id": "card-1", "front": "Revenue"}],
-        "available_lessons": [
-            {"id": "lesson-1", "title": "Business Meeting", "scenario": "Meetings"}
-        ],
+        "due_cards": [{"id": "card-1", "front": "Revenue", "back": "ingresos"}],
     }

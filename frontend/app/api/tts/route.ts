@@ -1,22 +1,26 @@
-import { OLLAMA_URL, TTS_MODEL, TTS_VOICE } from '@/lib/api'
+import { OLLAMA_URL } from '@/lib/api'
+import { DEFAULT_LANGUAGE, ttsFor } from '@/lib/languages'
 
 /**
  * Proxies speech synthesis to the local Ollama server so the browser never
  * talks to Ollama directly (avoids CORS and keeps URLs server-side).
  *
- * POST { text } -> audio/wav (24 kHz PCM, model phonon:40m-es, voice Alicia).
+ * POST { text, lang? } -> audio/wav (24 kHz PCM; model/voice resolved per
+ * target language in lib/languages.ts — currently Spanish only).
  */
 export async function POST(request: Request) {
-  const { text } = (await request.json()) as { text?: string }
+  const { text, lang } = (await request.json()) as { text?: string; lang?: string }
 
   if (!text || !text.trim()) {
     return Response.json({ error: 'text is required' }, { status: 400 })
   }
 
+  const { model, voice } = ttsFor(lang ?? DEFAULT_LANGUAGE)
+
   const upstream = await fetch(`${OLLAMA_URL}/v1/audio/speech`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: TTS_MODEL, voice: TTS_VOICE, input: text }),
+    body: JSON.stringify({ model, voice, input: text }),
   })
 
   if (!upstream.ok || !upstream.body) {

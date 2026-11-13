@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Voca Tutor",
-  description: "Learn Spanish with an AI Tutor",
+  description: "Learn a new language with an AI Tutor",
 };
 
 export default function RootLayout({
@@ -39,11 +39,7 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           <TooltipProvider>
-            <div className="flex h-screen overflow-hidden">
-              <div className="flex w-full h-full overflow-hidden">
-                {children}
-              </div>
-            </div>
+            {children}
             <Toaster />
           </TooltipProvider>
         </ThemeProvider>

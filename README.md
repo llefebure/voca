@@ -1,6 +1,6 @@
-# Voca 🇪🇸
+# Voca
 
-Voca is an AI-powered language learning experience designed to make Spanish acquisition natural, structured, and personalized. It combines real-time conversational tutoring with a sophisticated post-session analysis loop to ensure continuous progress.
+Voca is an AI-powered language learning experience designed to make acquisition natural, structured, and personalized. The interface is English; the target language is configurable per user (Spanish is supported today, more planned). It combines real-time conversational tutoring with a sophisticated post-session analysis loop to ensure continuous progress.
 
 ## 🚀 Overview
 
@@ -11,21 +11,21 @@ Voca moves beyond simple chatbots by implementing a structured session flow powe
 
 Voca leverages `pydantic-ai` to coordinate three primary agents:
 
-### 1. Session Planner Agent (`SessionPlannerAgent`)
+### 1. Session Planner Agent (`session_planner_agent`)
 Before a session begins, this agent:
 - Analyzes the user's current profile and goals.
-- Selects overdue SRS (Spaced Repetition System) cards.
-- Picks a relevant lesson template from the library.
+- Selects due SRS (Spaced Repetition System) cards, by ID.
+- Picks a lesson template and instantiates it on the fly (role play, reading comprehension, free conversation).
 - Generates a personalized "hook" to start the conversation.
 
-### 2. Spanish Tutor Agent (`TutorAgent`)
+### 2. Tutor Agent (`tutor_agent`)
 The primary interface for the learner, responsible for:
-- Leading a natural conversation in Spanish.
-- Managing the session flow and signaling phase transitions.
+- Leading a natural conversation in the learner's target language.
+- Guiding the conversation through the session plan's lesson, when one exists.
 - Providing supportive, implicit, and explicit corrections.
 - Optimizing responses for Text-to-Speech (TTS).
 
-### 3. Post-Session Analyst Agent (`PostSessionAgent`)
+### 3. Post-Session Analyst Agent (`post_session_agent`)
 After the session ends, this agent processes the transcript to:
 - **Generate Review Cards**: Extract new words, phrases, and grammar points into SRS cards.
 - **Grade Progress**: Evaluate the learner's performance on attempted cards.
@@ -91,6 +91,6 @@ After the session ends, this agent processes the transcript to:
    ```
 
 ## 📈 Session Lifecycle
-1. **Plan**: `POST /sessions/plan` $\rightarrow$ `SessionPlannerAgent` defines the goals.
-2. **Chat**: `POST /chat` $\rightarrow$ `TutorAgent` interacts with the user.
-3. **End**: `POST /sessions/end` $\rightarrow$ `PostSessionAgent` updates the learner's knowledge graph.
+1. **Plan**: `POST /sessions/plan` → `session_planner_agent` picks the lesson and cards (the frontend calls this right after the session starts).
+2. **Chat**: `POST /chat` → `tutor_agent` interacts with the user.
+3. **End**: `POST /sessions/end` → `post_session_agent` updates the learner's cards and profile.

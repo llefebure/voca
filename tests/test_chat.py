@@ -25,7 +25,7 @@ class FakeStreamResult:
 
 
 class FakeTutorAgent:
-    """Stands in for `spanish_tutor.run_stream` — yields canned text deltas."""
+    """Stands in for `tutor_agent.run_stream` — yields canned text deltas."""
 
     def __init__(self, chunks: list[str]) -> None:
         self.chunks = chunks
@@ -80,12 +80,25 @@ async def test_chat_unknown_session_returns_404(client, fake_supabase):
 
 
 @pytest.mark.asyncio
+async def test_chat_rejects_ended_sessions(client, fake_supabase):
+    """Ended sessions are archived: no further tutor turns."""
+    fake_supabase.results[("sessions", "select")] = [
+        {"id": "sess-1", "user_id": "user-1", "status": "completed"}
+    ]
+    response = await client.post(
+        "/chat", json={"message": "hola", "session_id": "sess-1"}, headers=AUTH
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Session has already ended"
+
+
+@pytest.mark.asyncio
 async def test_chat_streams_json_frames(client, monkeypatch, fake_supabase):
     """Every SSE frame is a single-line JSON object; deltas keep their newlines."""
     fake_supabase.results[("sessions", "select")] = [active_session_response()]
     fake_supabase.results[("profiles", "select")] = [{"id": "user-1", "level": "A2"}]
     chunks = ["¡Hola! ", "¿Cómo\nestás?\n", "Bien."]
-    monkeypatch.setattr(voca_main, "spanish_tutor", FakeTutorAgent(chunks))
+    monkeypatch.setattr(voca_main, "tutor_agent", FakeTutorAgent(chunks))
 
     response = await client.post(
         "/chat", json={"message": "hola", "session_id": "sess-1"}, headers=AUTH
@@ -121,7 +134,7 @@ async def test_chat_yields_error_event_on_backend_failure(client, monkeypatch, f
             raise RuntimeError("model exploded")
             yield  # pragma: no cover
 
-    monkeypatch.setattr(voca_main, "spanish_tutor", ExplodingTutor([]))
+    monkeypatch.setattr(voca_main, "tutor_agent", ExplodingTutor([]))
 
     response = await client.post(
         "/chat", json={"message": "hola", "session_id": "sess-1"}, headers=AUTH
@@ -147,7 +160,7 @@ async def test_chat_saves_partial_reply_after_failure(client, monkeypatch, fake_
             yield FakeStreamResult(["partial "])
             raise RuntimeError("mid-stream failure")
 
-    monkeypatch.setattr(voca_main, "spanish_tutor", PartialTutor(["partial "]))
+    monkeypatch.setattr(voca_main, "tutor_agent", PartialTutor(["partial "]))
 
     response = await client.post(
         "/chat", json={"message": "hola", "session_id": "sess-1"}, headers=AUTH
