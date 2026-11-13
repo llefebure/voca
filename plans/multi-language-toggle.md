@@ -224,7 +224,7 @@ post-session analysis) or stays open in history indefinitely.
 - [x] 6. Sidebar language dropdown (practiced / supported / upcoming / Add language…).
 - [x] 7. Chat page: toggle-clear to a fresh page, `?session=` continue flow (verify
           ownership, restore plan + transcript replay into `useChat`).
-- [ ] 8. History: language filter + Continue button on active sessions (list + transcript
+- [x] 8. History: language filter + Continue button on active sessions (list + transcript
           pages); Library/Profile/Onboarding language wiring.
 - [ ] 9. Gates: `uv run task test`, `uv run ruff check .`, frontend typecheck + lint.
 - [ ] 10. Push the branch and open a **draft PR** via the `gh` CLI (use the repo's
