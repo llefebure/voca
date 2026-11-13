@@ -57,6 +57,13 @@ class FakeSupabaseQuery:
         self.client.inserted.setdefault(self.table, []).extend(rows)
         return self
 
+    def upsert(self, values: Any, **_kwargs: Any) -> FakeSupabaseQuery:
+        self.operation = "upsert"
+        self.payload = values
+        rows = values if isinstance(values, list) else [values]
+        self.client.upserted.setdefault(self.table, []).extend(rows)
+        return self
+
     def update(self, values: Any, **_kwargs: Any) -> FakeSupabaseQuery:
         self.operation = "update"
         self.payload = values
@@ -100,6 +107,10 @@ class FakeSupabaseQuery:
         # `.single()`/`.maybe_single()` return the row itself, not a list.
         if getattr(self, "_single", False) and isinstance(data, list):
             data = data[0] if data else None
+        # Record select filters after builder completion, so assertions can check
+        # query scoping (e.g. the language filter on cards/sessions selects).
+        if self.operation == "select":
+            self.client.select_filters.setdefault(self.table, []).append(dict(self.filters))
         # Record update rows after builder completion, so filters applied after
         # `.update(...)` (e.g. `.eq("id", …)`) are captured.
         if self.operation == "update":
@@ -115,7 +126,9 @@ class FakeSupabase:
 
     results: dict[tuple[str, str], Any] = field(default_factory=dict)
     inserted: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    upserted: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     updated: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    select_filters: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     auth: FakeAuth = field(default_factory=FakeAuth)
 
     def table(self, name: str) -> FakeSupabaseQuery:
@@ -124,8 +137,14 @@ class FakeSupabase:
     def inserted_rows(self, table: str) -> list[dict[str, Any]]:
         return self.inserted.get(table, [])
 
+    def upserted_rows(self, table: str) -> list[dict[str, Any]]:
+        return self.upserted.get(table, [])
+
     def updated_rows(self, table: str) -> list[dict[str, Any]]:
         return self.updated.get(table, [])
+
+    def select_filters_rows(self, table: str) -> list[dict[str, Any]]:
+        return self.select_filters.get(table, [])
 
 
 @pytest.fixture
