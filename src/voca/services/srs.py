@@ -6,6 +6,7 @@ Card state is stored per row as a JSON object in `cards.fsrs_data`;
 
 import json
 from datetime import UTC, datetime
+from typing import Any
 
 from fsrs import Card, Rating, Scheduler
 
@@ -27,11 +28,26 @@ def new_card_state() -> str:
     return json.dumps(Card().to_dict())
 
 
+def review_card_state(
+    state_json: str, rating: Rating, when: datetime | None = None
+) -> tuple[str, dict[str, Any]]:
+    """Apply a review rating to a card; return the updated FSRS state JSON and log.
+
+    The log carries the FSRS rating as an int (1=Again 2=Hard 3=Good 4=Easy) and
+    the review timestamp, ready for a `card_reviews` row.
+    """
+    card = Card.from_dict(json.loads(state_json))
+    at = when or datetime.now(UTC)
+    updated_card, review_log = Scheduler().review_card(card, rating, at)
+    return (
+        json.dumps(updated_card.to_dict()),
+        {"rating": int(rating), "reviewed_at": review_log.review_datetime.isoformat()},
+    )
+
+
 def update_card_state(state_json: str, rating: Rating, when: datetime | None = None) -> str:
     """Apply a review rating to a card and return the updated FSRS state JSON."""
-    card = Card.from_dict(json.loads(state_json))
-    updated_card, _review_log = Scheduler().review_card(card, rating, when or datetime.now(UTC))
-    return json.dumps(updated_card.to_dict())
+    return review_card_state(state_json, rating, when)[0]
 
 
 def next_review(state_json: str) -> datetime:

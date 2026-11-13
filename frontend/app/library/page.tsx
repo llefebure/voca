@@ -11,6 +11,7 @@ import { Search, BookOpen, GraduationCap, Trash2 } from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { useLanguage } from '@/components/language-context'
 import { toast } from '@/components/ui/toast'
+import { cardStateLabel, dueLabel } from '@/lib/stats'
 
 type CardRow = {
   id: string
@@ -18,6 +19,9 @@ type CardRow = {
   front: string
   back: string
   source_sentence?: string | null
+  next_review: string | null
+  // JSONB as it arrives (string or object) — lib/stats parses both shapes.
+  fsrs_data: unknown
 }
 
 export default function LibraryPage() {
@@ -125,22 +129,37 @@ export default function LibraryPage() {
             {filteredCards.map((card) => (
               <Card key={card.id} className="group hover:shadow-md transition-all border-t-2 border-t-transparent hover:border-t-primary">
                 <CardContent className="p-6 space-y-4">
-                  <div className="flex items-start justify-between">
-                    <Badge variant="secondary" className="uppercase tracking-wider text-[10px]">
-                      {card.type}
-                    </Badge>
-                    <Button 
-                      size="icon" 
-                      variant="ghost" 
-                      className="h-8 w-8 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-                      onClick={() => {
-                        if (confirm('Delete this card?')) {
-                          handleDelete(card.id)
-                        }
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant="secondary" className="uppercase tracking-wider text-[10px]">
+                        {card.type}
+                      </Badge>
+                      <Badge variant="outline" className="uppercase tracking-wider text-[10px]">
+                        {cardStateLabel(card)}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {dueLabel(card) && (
+                        <Badge
+                          variant={dueLabel(card) === 'Due now' ? 'destructive' : 'outline'}
+                          className="text-[10px]"
+                        >
+                          {dueLabel(card)}
+                        </Badge>
+                      )}
+                      <Button 
+                        size="icon" 
+                        variant="ghost" 
+                        className="h-8 w-8 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                        onClick={() => {
+                          if (confirm('Delete this card?')) {
+                            handleDelete(card.id)
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                   <div className="space-y-3">
                     <div className="space-y-1">
