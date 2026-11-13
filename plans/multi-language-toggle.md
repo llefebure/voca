@@ -210,7 +210,7 @@ post-session analysis) or stays open in history indefinitely.
 
 - [x] 0. Create a feature branch (`feature/multi-language-toggle`); all steps below land
       on this branch, committed incrementally.
-- [ ] 1. Migration housekeeping: rename existing migration files to their git commit dates
+- [x] 1. Migration housekeeping: rename existing migration files to their git commit dates
       (table above), then a one-time `supabase db reset` in dev. Add
       `20261113000001_multi_language.sql`: language columns on `sessions`/`cards` (default
       `'es'`), `user_languages` table + RLS policies; verified via `uv run task dev`.
