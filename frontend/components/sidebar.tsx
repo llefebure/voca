@@ -17,7 +17,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem, DropdownMenuItem, DropdownMenuGroup, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut } from "@/components/ui/dropdown-menu"
 import { useLanguage } from "@/components/language-context"
 import { SUPPORTED_LANGUAGES, UPCOMING_LANGUAGES, languageName } from "@/lib/languages"
 import { supabase } from "@/lib/supabase"
@@ -86,27 +86,30 @@ export function Sidebar() {
           )}
         </div>
         <DropdownMenuContent align="start" className="w-56">
-          <DropdownMenuLabel>Learning language</DropdownMenuLabel>
-          {practicedLanguages.map((row) => (
-            <DropdownMenuCheckboxItem
-              key={row.language}
-              checked={row.language === activeLanguage}
-              onSelect={() => void toggleLanguage(row.language)}
-            >
-              {languageName(row.language)}
-            </DropdownMenuCheckboxItem>
-          ))}
-          {supportedNotPracticed.map((lang) => (
-            <DropdownMenuItem key={lang.code} onSelect={() => void toggleLanguage(lang.code)}>
-              {lang.name}
-            </DropdownMenuItem>
-          ))}
-          {UPCOMING_LANGUAGES.map((name) => (
-            <DropdownMenuItem key={name} disabled>
-              {name}
-              <span className="ml-auto text-xs text-muted-foreground">Soon</span>
-            </DropdownMenuItem>
-          ))}
+          {/* GroupLabel requires a Group ancestor (Base UI contract). */}
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Learning language</DropdownMenuLabel>
+            {practicedLanguages.map((row) => (
+              <DropdownMenuCheckboxItem
+                key={row.language}
+                checked={row.language === activeLanguage}
+                onSelect={() => void toggleLanguage(row.language)}
+              >
+                {languageName(row.language)}
+              </DropdownMenuCheckboxItem>
+            ))}
+            {supportedNotPracticed.map((lang) => (
+              <DropdownMenuItem key={lang.code} onSelect={() => void toggleLanguage(lang.code)}>
+                {lang.name}
+              </DropdownMenuItem>
+            ))}
+            {UPCOMING_LANGUAGES.map((name) => (
+              <DropdownMenuItem key={name} disabled>
+                {name}
+                <span className="ml-auto text-xs text-muted-foreground">Soon</span>
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuGroup>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={addLanguage}>
             <PlusIcon className="size-4" />
