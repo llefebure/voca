@@ -56,6 +56,7 @@ function sortByLastPracticed(rows: PracticedLanguage[]): PracticedLanguage[] {
 }
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
+  // Mounted in the root layout (app/layout.tsx) so every page can read it.
   const [activeLanguage, setActiveLanguage] = React.useState<string | null>(null)
   const [practicedLanguages, setPracticedLanguages] = React.useState<PracticedLanguage[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -147,7 +148,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
 export function useLanguage(): LanguageContextValue {
   const context = React.use(LanguageContext)
   if (!context) {
-    throw new Error('useLanguage must be used within a LanguageProvider (DashboardLayout)')
+    throw new Error('useLanguage must be used within a LanguageProvider (app/layout.tsx)')
   }
   return context
 }

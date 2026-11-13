@@ -227,7 +227,7 @@ post-session analysis) or stays open in history indefinitely.
 - [x] 8. History: language filter + Continue button on active sessions (list + transcript
           pages); Library/Profile/Onboarding language wiring.
 - [x] 9. Gates: `uv run task test`, `uv run ruff check .`, frontend typecheck + lint.
-- [ ] 10. Push the branch and open a **draft PR** via the `gh` CLI (use the repo's
+- [x] 10. Push the branch and open a **draft PR** via the `gh` CLI (use the repo's
       `create-pr` skill): summary of the change, the migration rename note (DB reset needed
       once locally), and how to verify; leave it in draft for review.
 
