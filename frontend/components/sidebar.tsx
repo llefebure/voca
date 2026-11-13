@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuCheckboxItem, DropdownMenuItem, DropdownMenuGroup, DropdownMenuLabel } from "@/components/ui/dropdown-menu"
 import { useLanguage } from "@/components/language-context"
-import { SUPPORTED_LANGUAGES, UPCOMING_LANGUAGES, languageName } from "@/lib/languages"
+import { SUPPORTED_LANGUAGES, languageName } from "@/lib/languages"
 import { supabase } from "@/lib/supabase"
 import { useRouter } from "next/navigation"
 
@@ -35,8 +35,9 @@ export function Sidebar() {
   const router = useRouter()
   const { activeLanguage, practicedLanguages, toggleLanguage } = useLanguage()
 
-  // Supported languages the user has not onboarded yet; picking one switches the
-  // target language directly (details can be filled in later via Profile).
+  // The dropdown lists languages the user has actually added. Supported languages
+  // without a row yet (e.g. the active one after pre-migration onboarding) stay
+  // selectable; upcoming languages are only shown in the onboarding wizard.
   const practiced = new Set(practicedLanguages.map((row) => row.language))
   const supportedNotPracticed = SUPPORTED_LANGUAGES.filter((lang) => !practiced.has(lang.code))
 
@@ -100,12 +101,6 @@ export function Sidebar() {
             {supportedNotPracticed.map((lang) => (
               <DropdownMenuItem key={lang.code} onSelect={() => void toggleLanguage(lang.code)}>
                 {lang.name}
-              </DropdownMenuItem>
-            ))}
-            {UPCOMING_LANGUAGES.map((name) => (
-              <DropdownMenuItem key={name} disabled>
-                {name}
-                <span className="ml-auto text-xs text-muted-foreground">Soon</span>
               </DropdownMenuItem>
             ))}
           </DropdownMenuGroup>
