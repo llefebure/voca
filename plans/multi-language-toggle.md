@@ -214,7 +214,7 @@ post-session analysis) or stays open in history indefinitely.
       (table above), then a one-time `supabase db reset` in dev. Add
       `20261113000001_multi_language.sql`: language columns on `sessions`/`cards` (default
       `'es'`), `user_languages` table + RLS policies; verified via `uv run task dev`.
-- [ ] 2. Backend: `fetch_effective_profile` helper; language-aware `fetch_due_cards`;
+- [x] 2. Backend: `fetch_effective_profile` helper; language-aware `fetch_due_cards`;
       `/sessions/start` stamping + profile sync + `user_languages` upsert.
 - [ ] 3. Backend: `GET /sessions?language=` language param + language field on responses,
       `end_session` (session-language due cards, card stamps, post-session profile updates

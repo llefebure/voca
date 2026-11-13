@@ -230,10 +230,11 @@ async def ollama_health():
 
 
 @app.get("/sessions", response_model=SessionListResponse)
-async def list_sessions(user=Depends(get_current_user)):
-    res = await db(
-        supabase.table("sessions").select("*").eq("user_id", user.id).order("created_at", desc=True)
-    )
+async def list_sessions(user=Depends(get_current_user), language: str | None = None):
+    query = supabase.table("sessions").select("*").eq("user_id", user.id)
+    if language:
+        query = query.eq("language", language)
+    res = await db(query.order("created_at", desc=True))
     return SessionListResponse(
         sessions=[
             SessionResponse(
@@ -242,6 +243,7 @@ async def list_sessions(user=Depends(get_current_user)):
                 created_at=session.get("created_at"),
                 end_time=session.get("end_time"),
                 recap=session.get("recap"),
+                language=session.get("language"),
             )
             for session in (res.data or [])
         ]
@@ -321,10 +323,8 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
         .eq("session_id", session["id"])
         .order("created_at")
     )
-    profile, due_cards = await asyncio.gather(
-        asyncio.to_thread(fetch_profile_by, user.id),
-        asyncio.to_thread(fetch_due_cards, user.id),
-    )
+    language = session.get("language")
+    due_cards = await asyncio.to_thread(fetch_due_cards, user.id, language)
 
     result = await post_session_agent.run(
         "Analyze the session and generate cards and recap.",
@@ -333,7 +333,7 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
             "session_id": session["id"],
             "transcript": transcript.data or [],
             "due_cards": compact_cards(due_cards),
-            "target_language": (profile or {}).get("target_language"),
+            "target_language": language,
             "session_plan": session.get("plan"),
         },
     )
@@ -355,6 +355,8 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
                         "front": card.front,
                         "back": card.back,
                         "source_sentence": card.source_sentence,
+                        # The card belongs to the session's language.
+                        "language": language,
                         # `state` is a plain label; the FSRS schedule lives in `fsrs_data`.
                         "state": "new",
                         "fsrs_data": new_card_state(),
@@ -396,7 +398,12 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
 
     profile_updates = analysis.profile_updates.model_dump(exclude_none=True)
     if profile_updates:
-        await db(supabase.table("profiles").update(profile_updates).eq("id", user.id))
+        # Per-language details (level/goals/interests) live in user_languages.
+        await db(
+            supabase.table("user_languages").upsert(
+                {"user_id": user.id, "language": language, **profile_updates}
+            )
+        )
 
     recap = analysis.recap.model_dump()
     # Words the learner actually produced this session — real data, unlike the
