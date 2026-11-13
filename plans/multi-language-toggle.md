@@ -221,7 +221,7 @@ post-session analysis) or stays open in history indefinitely.
       → `user_languages`).
 - [x] 4. Backend tests for all the above.
 - [x] 5. Frontend: `language-context.tsx` provider + `DashboardLayout` wiring.
-- [ ] 6. Sidebar language dropdown (practiced / supported / upcoming / Add language…).
+- [x] 6. Sidebar language dropdown (practiced / supported / upcoming / Add language…).
 - [ ] 7. Chat page: toggle-clear to a fresh page, `?session=` continue flow (verify
           ownership, restore plan + transcript replay into `useChat`).
 - [ ] 8. History: language filter + Continue button on active sessions (list + transcript
