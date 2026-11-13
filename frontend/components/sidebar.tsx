@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
+import Image from "next/image"
 import { usePathname } from "next/navigation"
 import {
   MessageSquare,
@@ -11,7 +12,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Languages,
   LogOut,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -59,14 +59,14 @@ export function Sidebar() {
           {isCollapsed ? (
             <DropdownMenuTrigger
               render={
-                <button className="bg-primary p-2 rounded-lg shrink-0 text-primary-foreground cursor-pointer hover:bg-primary/90 transition-colors">
-                  <Languages className="size-5" />
+                <button className="shrink-0 cursor-pointer rounded-xl transition-opacity hover:opacity-90">
+                  <Image src="/logo.svg" alt="Voca" width={36} height={36} unoptimized />
                 </button>
               }
             />
           ) : (
-            <div className="bg-primary p-2 rounded-lg shrink-0">
-              <Languages className="size-5 text-primary-foreground" />
+            <div className="shrink-0">
+              <Image src="/logo.svg" alt="Voca" width={36} height={36} unoptimized />
             </div>
           )}
           {!isCollapsed && (

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img" aria-labelledby="voca-icon-title">
+  <title id="voca-icon-title">Voca app icon</title>
+  <rect x="0" y="0" width="400" height="400" rx="90" fill="#6A54D4"/>
+  <g transform="translate(200 200) scale(0.6) translate(-527 -240)" fill="none" stroke="#FDF9F0" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="338" y1="236" x2="338" y2="274"/>
+    <line x1="714" y1="232" x2="714" y2="270"/>
+    <path d="M390 282 V215 C390 185 430 180 450 220 L505 310 L560 190 C580 150 620 150 640 215 L662 272"/>
+  </g>
+</svg>

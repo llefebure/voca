@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useRouter } from 'next/navigation'
-import { Languages } from 'lucide-react'
+import Image from 'next/image'
 import { toast } from '@/components/ui/toast'
 
 export default function AuthPage() {
@@ -42,11 +42,9 @@ export default function AuthPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-md space-y-8 rounded-2xl border bg-card p-8 shadow-sm">
+      <div className="w-full max-w-md space-y-8 rounded-2xl border bg-card bg-linear-to-br from-primary/5 to-brand-pink/10 dark:from-primary/15 dark:to-brand-pink/10 p-8 shadow-sm">
         <div className="text-center space-y-2">
-          <div className="mx-auto bg-primary w-12 h-12 rounded-xl flex items-center justify-center mb-4">
-            <Languages className="h-6 w-6 text-primary-foreground" />
-          </div>
+          <Image src="/logo.svg" alt="Voca" width={48} height={48} unoptimized className="mx-auto mb-4" />
           <h2 className="text-3xl font-bold tracking-tight">
             {mode === 'signin' ? 'Welcome Back' : 'Create Account'}
           </h2>

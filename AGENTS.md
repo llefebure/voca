@@ -45,3 +45,5 @@ supabase/migrations/ # schema; tests/  # pytest suite (offline by default)
 - `/chat` is SSE: each event is a single-line JSON `{type: "delta"|"error"|"done", …}` on `data:`.
 - Frontend talks to the backend through `lib/api.ts` constants (language names + TTS config in `lib/languages.ts`); auth = Supabase JWT in `Authorization: Bearer`.
 - After backend or frontend changes: run `uv run task test`, `uv run ruff check .`, and the frontend typecheck/lint — **fix breakage before claiming done**.
+- Plan documents live in `plans/` (e.g. `plans/<short-name>.md`), never at the repo root — one file per plan, same filename across revisions.
+- Do the work on a dedicated feature branch cut from `main` (e.g. `feature/<short-name>`, or `fix/<short-name>` for bug fixes); do not commit directly to `main`.

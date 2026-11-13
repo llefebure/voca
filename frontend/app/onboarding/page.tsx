@@ -242,7 +242,7 @@ export default function OnboardingPage() {
 
           {step === 'complete' && (
             <div className="text-center space-y-8 animate-in zoom-in-95 duration-500">
-              <div className="mx-auto w-24 h-24 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-4">
+              <div className="mx-auto w-24 h-24 bg-brand-green/25 text-success rounded-full flex items-center justify-center mb-4">
                 <CheckCircle className="h-12 w-12" />
               </div>
               <div className="space-y-2">
