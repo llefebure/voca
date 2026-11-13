@@ -103,8 +103,8 @@ export default function HistoryPage() {
                       <span className={cn(
                         "px-2 py-1 rounded-full text-xs font-medium",
                         session.status === 'completed' 
-                          ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400" 
-                          : "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                          ? "bg-brand-green/25 text-success dark:bg-brand-green/15 dark:text-brand-green"
+                          : "bg-primary/10 text-primary dark:bg-primary/20 dark:text-primary"
                       )}>
                         {session.status === 'completed' ? 'Completed' : 'Active'}
                       </span>

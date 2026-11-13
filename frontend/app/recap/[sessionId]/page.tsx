@@ -123,13 +123,13 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
             <div className="grid gap-6">
               <div className="space-y-3">
                 <h3 className="font-semibold flex items-center gap-2 text-sm uppercase tracking-wider text-muted-foreground">
-                  <CheckCircle className="h-4 w-4 text-green-500" />
+                  <CheckCircle className="h-4 w-4 text-success" />
                   Wins & Progress
                 </h3>
                 <ul className="space-y-2">
                   {recap.positives?.map((positive, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm bg-green-50 dark:bg-green-900/10 p-2 rounded-lg border border-green-100 dark:border-green-900/30">
-                      <span className="text-green-500 mt-1">•</span>
+                    <li key={i} className="flex items-start gap-2 text-sm bg-brand-green/10 dark:bg-brand-green/5 p-2 rounded-lg border border-brand-green/30 dark:border-brand-green/20">
+                      <span className="text-success mt-1">•</span>
                       {positive}
                     </li>
                   ))}
