@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Voca Tutor",
+  title: "Voca",
   description: "Learn a new language with an AI Tutor",
 };
 
