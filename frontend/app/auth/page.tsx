@@ -51,7 +51,7 @@ export default function AuthPage() {
             {mode === 'signin' ? 'Welcome Back' : 'Create Account'}
           </h2>
           <p className="text-sm text-muted-foreground">
-            {mode === 'signin' ? 'Sign in to continue your practice' : 'Start your Spanish journey today'}
+            {mode === 'signin' ? 'Sign in to continue your practice' : 'Start your language journey today'}
           </p>
         </div>
         <form className="mt-8 space-y-6" onSubmit={handleAuth}>

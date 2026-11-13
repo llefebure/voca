@@ -9,9 +9,10 @@ from voca.agents.post_session_agent import (
     CardCandidate,
     CardGrade,
     PostSessionResult,
+    ProfileUpdates,
     SessionRecap,
 )
-from voca.agents.session_planner_agent import PlannedCard, SessionPlan
+from voca.agents.session_planner_agent import LessonSpec, SessionPlan
 from voca.services.srs import new_card_state
 
 AUTH = {"Authorization": "Bearer valid-token"}
@@ -38,13 +39,11 @@ def analyst_result() -> PostSessionResult:
         ],
         reviewed_cards=[CardGrade(card_id="card-1", outcome="pass")],
         recap=SessionRecap(
-            time_spoken="12 minutes",
-            lesson_completed=True,
             positives=["good vocabulary"],
             key_corrections=["ser vs estar"],
             next_time_preview="restaurant role play",
         ),
-        profile_updates={"interests": "architecture"},
+        profile_updates=ProfileUpdates(interests="architecture"),
     )
 
 
@@ -110,6 +109,8 @@ async def test_end_session_inserts_cards_and_updates_srs(
     body = response.json()
     assert body["new_cards_count"] == 1
     assert body["recap"]["next_time_preview"] == "restaurant role play"
+    # "Words you spoke" is computed from the transcript, not invented by the model.
+    assert body["recap"]["user_word_count"] == 5
 
     # New cards: labelled `new`, FSRS state in its own column, due immediately.
     inserted_cards = fake_supabase.inserted_rows("cards")
@@ -142,13 +143,11 @@ async def test_end_session_skips_not_attempted_cards(client, fake_supabase, monk
         new_cards=[],
         reviewed_cards=[CardGrade(card_id="card-1", outcome="not_attempted")],
         recap=SessionRecap(
-            time_spoken="1 minute",
-            lesson_completed=False,
             positives=[],
             key_corrections=[],
             next_time_preview="tomorrow",
         ),
-        profile_updates={},
+        profile_updates=ProfileUpdates(),
     )
 
     async def fake_run(_prompt, deps=None):
@@ -171,15 +170,22 @@ async def test_end_session_skips_not_attempted_cards(client, fake_supabase, monk
 @pytest.mark.asyncio
 async def test_plan_session_stores_plan(client, fake_supabase, monkeypatch):
     plan = SessionPlan(
-        suggested_lesson_id="lesson-1",
-        target_cards=[
-            PlannedCard(card_id="card-1", content="Revenue terms", reason="due this session")
-        ],
+        lesson=LessonSpec(
+            template="role_play",
+            topic="At the pharmacy",
+            scenario="Pharmacist and customer",
+            objectives=["describe symptoms"],
+        ),
+        card_ids=["card-1"],
         opening_hook="¡Hola Alex!",
     )
 
     async def fake_run(_prompt, deps=None):
         assert deps["user_profile"]["goals"] == "business Spanish"
+        # The planner only sees compact rows (no FSRS state) — selection is by ID,
+        # and there is no lesson bank to pass in.
+        assert deps["due_cards"] == [{"id": "card-1", "front": "exhausted", "back": "agotado"}]
+        assert "available_lessons" not in deps
         return type("R", (), {"output": plan})()
 
     monkeypatch.setattr(voca_main.session_planner_agent, "run", fake_run)
@@ -187,14 +193,37 @@ async def test_plan_session_stores_plan(client, fake_supabase, monkeypatch):
         {"id": "sess-1", "user_id": "user-1", "status": "active"}
     ]
     fake_supabase.results[("profiles", "select")] = [{"id": "user-1", "goals": "business Spanish"}]
-    fake_supabase.results[("cards", "select")] = []
-    fake_supabase.results[("lessons", "select")] = []
+    fake_supabase.results[("cards", "select")] = [
+        {"id": "card-1", "front": "exhausted", "back": "agotado", "fsrs_data": new_card_state()}
+    ]
 
     response = await client.post("/sessions/plan", params={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
-    assert response.json()["opening_hook"] == "¡Hola Alex!"
+    body = response.json()
+    assert body["opening_hook"] == "¡Hola Alex!"
+    assert body["lesson"]["template"] == "role_play"
+    # Selected IDs were resolved into stored card content for /chat to consume.
+    assert body["cards"] == [{"id": "card-1", "front": "exhausted", "back": "agotado"}]
     plan_update = fake_supabase.updated_rows("sessions")[0]
-    assert plan_update["values"]["plan"]["suggested_lesson_id"] == "lesson-1"
+    assert plan_update["values"]["plan"]["lesson"]["topic"] == "At the pharmacy"
+
+
+@pytest.mark.asyncio
+async def test_plan_rejects_ended_session(client, fake_supabase):
+    fake_supabase.results[("sessions", "select")] = [
+        {"id": "sess-1", "user_id": "user-1", "status": "completed"}
+    ]
+    response = await client.post("/sessions/plan", params={"session_id": "sess-1"}, headers=AUTH)
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_end_session_rejects_already_ended(client, fake_supabase):
+    fake_supabase.results[("sessions", "select")] = [
+        {"id": "sess-1", "user_id": "user-1", "status": "completed"}
+    ]
+    response = await client.post("/sessions/end", params={"session_id": "sess-1"}, headers=AUTH)
+    assert response.status_code == 409
 
 
 @pytest.mark.asyncio

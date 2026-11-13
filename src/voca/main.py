@@ -24,7 +24,7 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 
 from voca.agents.post_session_agent import post_session_agent
 from voca.agents.session_planner_agent import session_planner_agent
-from voca.agents.tutor_agent import TutorDeps, spanish_tutor
+from voca.agents.tutor_agent import TutorDeps, tutor_agent
 from voca.services.llm import LLM_BASE_URL, ollama_model
 from voca.services.srs import (
     VOCA_RATING_MAP,
@@ -93,6 +93,14 @@ def fetch_due_cards(user_id: str) -> list[dict[str, Any]]:
         .execute()
     )
     return res.data or {}
+
+
+def compact_cards(rows: list[dict[str, Any]]) -> list[dict[str, str | None]]:
+    """The only card fields the LLM ever sees; selection/grading happens by ID."""
+    return [
+        {"id": row.get("id"), "front": row.get("front") or "", "back": row.get("back") or ""}
+        for row in rows
+    ]
 
 
 def get_owned_session(session_id: str, user_id: str) -> dict[str, Any]:
@@ -227,11 +235,12 @@ async def start_session(user=Depends(get_current_user)):
 @app.post("/sessions/plan")
 async def plan_session(session_id: str, user=Depends(get_current_user)):
     session = get_owned_session(session_id, user.id)
+    if session["status"] != "active":
+        raise HTTPException(status_code=409, detail="Session has already ended")
 
-    profile, due_cards, lessons = await asyncio.gather(
+    profile, due_cards = await asyncio.gather(
         asyncio.to_thread(fetch_profile_by, user.id),
         asyncio.to_thread(fetch_due_cards, user.id),
-        db(supabase.table("lessons").select("*")),
     )
     profile = profile or {}
 
@@ -240,20 +249,27 @@ async def plan_session(session_id: str, user=Depends(get_current_user)):
         deps={
             "user_id": user.id,
             "user_profile": profile,
-            "due_cards": due_cards,
-            "available_lessons": lessons.data or [],
+            "due_cards": compact_cards(due_cards),
         },
     )
     plan = result.output
 
-    await db(supabase.table("sessions").update({"plan": plan.model_dump()}).eq("id", session["id"]))
-    return plan
+    # Keep only selections that are actually due cards, and resolve their
+    # content into the stored plan so /chat never has to re-query cards.
+    by_id = {card["id"]: card for card in due_cards}
+    selected_cards = compact_cards([by_id[cid] for cid in plan.card_ids if cid in by_id])
+    plan_payload = {**plan.model_dump(), "cards": selected_cards}
+
+    await db(supabase.table("sessions").update({"plan": plan_payload}).eq("id", session["id"]))
+    return plan_payload
 
 
 @app.post("/sessions/end")
 async def end_session(session_id: str, user=Depends(get_current_user)):
     """Mark the session completed and run the post-session analyst."""
     session = get_owned_session(session_id, user.id)
+    if session["status"] != "active":
+        raise HTTPException(status_code=409, detail="Session has already ended")
     now = datetime.now(UTC).isoformat()
 
     transcript = await db(
@@ -262,7 +278,10 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
         .eq("session_id", session["id"])
         .order("created_at")
     )
-    due_cards = await asyncio.to_thread(fetch_due_cards, user.id)
+    profile, due_cards = await asyncio.gather(
+        asyncio.to_thread(fetch_profile_by, user.id),
+        asyncio.to_thread(fetch_due_cards, user.id),
+    )
 
     result = await post_session_agent.run(
         "Analyze the session and generate cards and recap.",
@@ -270,7 +289,9 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
             "user_id": user.id,
             "session_id": session["id"],
             "transcript": transcript.data or [],
-            "due_cards": due_cards,
+            "due_cards": compact_cards(due_cards),
+            "target_language": (profile or {}).get("target_language"),
+            "session_plan": session.get("plan"),
         },
     )
     analysis = result.output
@@ -330,19 +351,23 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
             .eq("id", review.card_id)
         )
 
-    if analysis.profile_updates:
-        await db(supabase.table("profiles").update(analysis.profile_updates).eq("id", user.id))
+    profile_updates = analysis.profile_updates.model_dump(exclude_none=True)
+    if profile_updates:
+        await db(supabase.table("profiles").update(profile_updates).eq("id", user.id))
 
-    if analysis.recap:
-        await db(
-            supabase.table("sessions")
-            .update({"recap": analysis.recap.model_dump()})
-            .eq("id", session["id"])
-        )
+    recap = analysis.recap.model_dump()
+    # Words the learner actually produced this session — real data, unlike the
+    # agent-invented "time spoken" (removed from the recap model).
+    recap["user_word_count"] = sum(
+        len((message.get("text") or "").split())
+        for message in (transcript.data or [])
+        if message.get("speaker") == "user"
+    )
+    await db(supabase.table("sessions").update({"recap": recap}).eq("id", session["id"]))
 
     return {
         "status": "session ended",
-        "recap": analysis.recap,
+        "recap": recap,
         "new_cards_count": len(analysis.new_cards),
     }
 
@@ -360,22 +385,31 @@ async def translate_text(request: TranslationRequest):
 @app.post("/chat")
 async def chat(request: ChatRequest, user=Depends(get_current_user)):
     session = get_owned_session(request.session_id, user.id)
+    if session["status"] != "active":
+        raise HTTPException(status_code=409, detail="Session has already ended")
     profile = await asyncio.to_thread(fetch_profile_by, user.id)
 
     # Record the user's turn before responding so a mid-stream failure cannot lose it.
     await asyncio.to_thread(insert_transcript, session["id"], "user", request.message)
 
+    # The plan's opening hook steers only the first reply; later turns already
+    # have history, so drop it to avoid a re-greeting mid-session.
+    plan: dict[str, Any] | None = session.get("plan")
+    if plan and request.history:
+        plan = {key: value for key, value in plan.items() if key != "opening_hook"}
+
     deps: TutorDeps = {
         "user_id": user.id,
         "user_profile": profile,
         "session_id": session["id"],
+        "session_plan": plan,
     }
     history = pydantic_history(request.history)
 
     async def event_generator():
         full_response = ""
         try:
-            async with spanish_tutor.run_stream(
+            async with tutor_agent.run_stream(
                 request.message, message_history=history, deps=deps
             ) as result:
                 async for delta in result.stream_text(delta=True):

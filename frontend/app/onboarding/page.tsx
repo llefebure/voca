@@ -9,15 +9,20 @@ import { Card, CardContent } from '@/components/ui/card'
 import { useRouter } from 'next/navigation'
 import { CheckCircle, Target, Mic, Settings, ChevronRight } from 'lucide-react'
 import { toast } from '@/components/ui/toast'
+import {
+  DEFAULT_LANGUAGE,
+  SUPPORTED_LANGUAGES,
+  UPCOMING_LANGUAGES,
+} from '@/lib/languages'
 
-type OnboardingStep = 'setup' | 'goals' | 'placement' | 'preferences' | 'complete'
+type OnboardingStep = 'setup' | 'goals' | 'preferences' | 'complete'
 
 export default function OnboardingPage() {
   const [step, setStep] = useState<OnboardingStep>('setup')
   const [formData, setFormData] = useState({
+    target_language: DEFAULT_LANGUAGE as string,
     level: 'B1',
     goals: '',
-    deadline: '',
     interests: '',
     correction_intensity: 'standard',
     speech_speed: 'normal'
@@ -27,36 +32,14 @@ export default function OnboardingPage() {
   const steps: { id: OnboardingStep; label: string }[] = [
     { id: 'setup', label: 'Level' },
     { id: 'goals', label: 'Goals' },
-    { id: 'placement', label: 'Calibration' },
     { id: 'preferences', label: 'Tuning' },
   ]
+  const stepIndex = steps.findIndex((s) => s.id === step)
 
   const nextStep = () => {
     if (step === 'setup') setStep('goals')
-    else if (step === 'goals') setStep('placement')
-    else if (step === 'placement') setStep('preferences')
+    else if (step === 'goals') setStep('preferences')
     else if (step === 'preferences') setStep('complete')
-  }
-
-  const startPlacementChat = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
-    try {
-      await supabase.from('profiles').upsert({
-        id: user.id,
-        level: formData.level,
-        goals: formData.goals,
-        interests: formData.interests,
-      })
-      router.push('/')
-    } catch {
-      toast({
-        title: "Setup Error",
-        description: "Failed to save your initial profile.",
-        type: "error",
-      })
-    }
   }
 
   const completeOnboarding = async () => {
@@ -66,6 +49,7 @@ export default function OnboardingPage() {
     try {
       await supabase.from('profiles').upsert({
         id: user.id,
+        target_language: formData.target_language,
         level: formData.level,
         goals: formData.goals,
         interests: formData.interests,
@@ -94,11 +78,11 @@ export default function OnboardingPage() {
               <p className="text-primary-foreground/80 mt-1">Let&apos;s personalize your learning journey</p>
             </div>
             <div className="hidden md:flex gap-2">
-              {steps.map((s) => (
+              {steps.map((s, i) => (
                 <div 
                   key={s.id} 
                   className={`h-1.5 w-8 rounded-full transition-colors ${
-                    (step === s.id || (step !== 'setup' && s.id !== 'preferences' && steps.indexOf(s) < steps.indexOf({id: step, label: ''}))) 
+                    stepIndex < 0 || i <= stepIndex 
                     ? 'bg-white' 
                     : 'bg-primary-foreground/30'
                   }`}
@@ -134,12 +118,6 @@ export default function OnboardingPage() {
                     ))}
                   </div>
                 </div>
-                <div className="p-6 bg-muted/50 rounded-2xl border border-dashed border-border text-center space-y-4">
-                  <p className="text-sm font-medium text-muted-foreground">Microphone Check</p>
-                  <Button variant="outline" onClick={() => toast({ title: "Mic Check", description: "Microphone is working perfectly!", type: "success" })}>
-                    Test Microphone
-                  </Button>
-                </div>
               </div>
               <Button className="w-full h-12 rounded-xl text-lg" onClick={nextStep}>
                 Continue <ChevronRight className="ml-2 h-5 w-5" />
@@ -158,7 +136,28 @@ export default function OnboardingPage() {
               </div>
               <div className="space-y-5">
                 <div className="space-y-3">
-                  <Label>Why are you learning Spanish?</Label>
+                  <Label>Language to learn</Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    {SUPPORTED_LANGUAGES.map((lang) => (
+                      <Button
+                        key={lang.code}
+                        variant={formData.target_language === lang.code ? 'default' : 'outline'}
+                        className="h-12 text-lg"
+                        onClick={() => setFormData({...formData, target_language: lang.code})}
+                      >
+                        {lang.name}
+                      </Button>
+                    ))}
+                    {UPCOMING_LANGUAGES.map((name) => (
+                      <Button key={name} variant="outline" disabled className="h-12 text-lg">
+                        {name}
+                        <span className="ml-2 text-xs text-muted-foreground">Coming soon</span>
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  <Label>Why are you learning {SUPPORTED_LANGUAGES.find(l => l.code === formData.target_language)?.name ?? 'your target language'}?</Label>
                   <Input 
                     placeholder="e.g. Trip to Mexico, work, partner's family..." 
                     value={formData.goals}
@@ -175,35 +174,9 @@ export default function OnboardingPage() {
                     className="h-12 rounded-lg"
                   />
                 </div>
-                <div className="space-y-3">
-                  <Label>Any specific deadline?</Label>
-                  <Input 
-                    type="date" 
-                    value={formData.deadline}
-                    onChange={(e) => setFormData({...formData, deadline: e.target.value})}
-                    className="h-12 rounded-lg"
-                  />
-                </div>
               </div>
               <Button className="w-full h-12 rounded-xl text-lg" onClick={nextStep}>
                 Continue <ChevronRight className="ml-2 h-5 w-5" />
-              </Button>
-            </div>
-          )}
-
-          {step === 'placement' && (
-            <div className="space-y-8 text-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="mx-auto w-16 h-16 bg-primary/10 text-primary rounded-full flex items-center justify-center mb-4">
-                <CheckCircle className="h-8 w-8" />
-              </div>
-              <div className="space-y-3">
-                <h2 className="text-2xl font-bold">Calibration Chat</h2>
-                <p className="text-muted-foreground max-w-md mx-auto">
-                  The tutor wants to chat with you for a few minutes to calibrate your level and find your &quot;sweet spot&quot; for learning.
-                </p>
-              </div>
-              <Button className="w-full h-12 rounded-xl text-lg" onClick={startPlacementChat}>
-                Start Placement Chat <ChevronRight className="ml-2 h-5 w-5" />
               </Button>
             </div>
           )}

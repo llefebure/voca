@@ -10,8 +10,14 @@ import { useRouter } from 'next/navigation'
 import { Target, Settings, BookOpen, Save, X, TrendingUp } from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { toast } from '@/components/ui/toast'
+import {
+  SUPPORTED_LANGUAGES,
+  UPCOMING_LANGUAGES,
+  languageName,
+} from '@/lib/languages'
 
 type ProfileFields = {
+  target_language?: string
   level?: string
   goals?: string
   interests?: string
@@ -98,6 +104,10 @@ export default function ProfilePage() {
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="space-y-2">
+                <Label className="text-xs text-muted-foreground uppercase tracking-wider">Learning</Label>
+                <p className="text-2xl font-bold">{languageName(profile?.target_language)}</p>
+              </div>
+              <div className="space-y-2">
                 <Label className="text-xs text-muted-foreground uppercase tracking-wider">Current Level</Label>
                 <p className="text-2xl font-bold">{profile?.level || 'Not set'}</p>
               </div>
@@ -125,6 +135,26 @@ export default function ProfilePage() {
             <CardContent>
               {isEditing ? (
                 <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Learning language</Label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {SUPPORTED_LANGUAGES.map((lang) => (
+                        <Button
+                          key={lang.code}
+                          variant={editedProfile.target_language === lang.code ? 'default' : 'outline'}
+                          onClick={() => setEditedProfile({...editedProfile, target_language: lang.code})}
+                        >
+                          {lang.name}
+                        </Button>
+                      ))}
+                      {UPCOMING_LANGUAGES.map((name) => (
+                        <Button key={name} variant="outline" disabled>
+                          {name}
+                          <span className="ml-1 text-xs text-muted-foreground">Soon</span>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
                   <div className="space-y-2">
                     <Label>Goals</Label>
                     <Input 
