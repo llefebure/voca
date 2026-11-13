@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, Lock, FileX } from 'lucide-react'
+import { ArrowRight, Lock, FileX, MessageSquare } from 'lucide-react'
 import { format } from 'date-fns'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
@@ -107,9 +107,24 @@ function TranscriptContent({ params }: { params: Promise<{ sessionId: string }> 
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Lock className="h-3 w-3" /> Read-only · this session has ended
-                </span>
+                {meta?.status === 'active' ? (
+                  <>
+                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      Session still in progress
+                    </span>
+                    <Button
+                      variant="default"
+                      size="sm"
+                      onClick={() => router.push(`/?session=${sessionId}`)}
+                    >
+                      <MessageSquare className="h-3 w-3" /> Continue
+                    </Button>
+                  </>
+                ) : (
+                  <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Lock className="h-3 w-3" /> Read-only · this session has ended
+                  </span>
+                )}
                 <Button
                   variant="outline"
                   size="sm"

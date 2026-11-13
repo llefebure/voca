@@ -47,6 +47,8 @@ export default function OnboardingPage() {
     if (!user) return
 
     try {
+      // `target_language` is the active-language pointer; the same wizard adds a new
+      // language later (sidebar "Add language…") — its row lands in user_languages.
       await supabase.from('profiles').upsert({
         id: user.id,
         target_language: formData.target_language,
@@ -57,6 +59,16 @@ export default function OnboardingPage() {
           correction_intensity: formData.correction_intensity,
           speech_speed: formData.speech_speed
         }
+      })
+      // Per-language learner details live in user_languages (profile fallbacks stay
+      // in profiles for pre-multi-language data). last_practiced_at is untouched so
+      // re-onboarding never resets the practiced ordering.
+      await supabase.from('user_languages').upsert({
+        user_id: user.id,
+        language: formData.target_language,
+        level: formData.level,
+        goals: formData.goals,
+        interests: formData.interests
       })
       router.push('/')
     } catch {
