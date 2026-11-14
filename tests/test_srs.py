@@ -5,7 +5,13 @@ from datetime import UTC, datetime, timedelta
 
 from fsrs import Rating
 
-from voca.services.srs import VOCA_RATING_MAP, new_card_state, next_review, update_card_state
+from voca.services.srs import (
+    VOCA_RATING_MAP,
+    new_card_state,
+    next_review,
+    review_card_state,
+    update_card_state,
+)
 
 
 def test_new_card_state_is_fsrs_json():
@@ -57,3 +63,15 @@ def test_update_card_state_accepts_explicit_review_time():
     # Not rescheduled relative to "now", but to the explicit review time.
     assert due < datetime.now(UTC) + timedelta(days=1)
     assert due >= review_time
+
+
+def test_review_card_state_returns_the_log():
+    """The log exposes the FSRS rating as an int plus the review timestamp."""
+    state = new_card_state()
+    review_time = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
+    new_state, review_log = review_card_state(state, Rating.Good, review_time)
+
+    assert review_log["rating"] == 3  # FSRS: 1=Again 2=Hard 3=Good 4=Easy
+    assert review_log["reviewed_at"] == review_time.isoformat()
+    # The returned state is the same as the state-only helper produces.
+    assert json.loads(new_state)["last_review"] == review_time.isoformat()

@@ -8,6 +8,7 @@ import {
   MessageSquare,
   History,
   BookOpen,
+  ChartColumn,
   User,
   ChevronDown,
   ChevronLeft,
@@ -26,6 +27,7 @@ const navItems = [
   { name: "Chat", href: "/", icon: MessageSquare },
   { name: "History", href: "/history", icon: History },
   { name: "Library", href: "/library", icon: BookOpen },
+  { name: "Progress", href: "/progress", icon: ChartColumn },
   { name: "Profile", href: "/profile", icon: User },
 ]
 

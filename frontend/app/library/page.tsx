@@ -7,10 +7,11 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useRouter } from 'next/navigation'
-import { Search, BookOpen, GraduationCap, Trash2 } from 'lucide-react'
+import { Search, BookOpen, Trash2 } from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { useLanguage } from '@/components/language-context'
 import { toast } from '@/components/ui/toast'
+import { cardStateLabel, dueLabel } from '@/lib/stats'
 
 type CardRow = {
   id: string
@@ -18,12 +19,18 @@ type CardRow = {
   front: string
   back: string
   source_sentence?: string | null
+  next_review: string | null
+  // JSONB as it arrives (string or object) — lib/stats parses both shapes.
+  fsrs_data: unknown
 }
 
 export default function LibraryPage() {
   const [cards, setCards] = useState<CardRow[]>([])
   const [filter, setFilter] = useState('')
   const [loading, setLoading] = useState(true)
+  // The due-badge clock is taken at fetch time in the effect — never at render
+  // (render-time `new Date()` is an unstable value under Next 16 prerendering).
+  const [now, setNow] = useState<Date | null>(null)
   const router = useRouter()
   // Cards belong to their session's language; the library shows the active one.
   const { activeLanguage, loading: languageLoading } = useLanguage()
@@ -47,6 +54,7 @@ export default function LibraryPage() {
 
         if (error) throw error
         setCards(data || [])
+        setNow(new Date())
       } catch (error) {
         console.error('Error fetching cards:', error)
       } finally {
@@ -83,15 +91,6 @@ export default function LibraryPage() {
   return (
     <DashboardLayout title="Card Library">
       <div className="mx-auto max-w-6xl space-y-8 p-4 md:p-8">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Title is in DashboardLayout */}
-          </div>
-          <Button variant="outline" onClick={() => router.push('/')}>
-            Start Practicing
-          </Button>
-        </div>
-
         <div className="flex gap-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -101,12 +100,6 @@ export default function LibraryPage() {
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" className="hidden md:flex items-center gap-2 rounded-full">
-              <GraduationCap className="h-4 w-4" />
-              Filter by Level
-            </Button>
           </div>
         </div>
 
@@ -122,25 +115,42 @@ export default function LibraryPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredCards.map((card) => (
+            {filteredCards.map((card) => {
+              const due = dueLabel(card, now)
+              return (
               <Card key={card.id} className="group hover:shadow-md transition-all border-t-2 border-t-transparent hover:border-t-primary">
                 <CardContent className="p-6 space-y-4">
-                  <div className="flex items-start justify-between">
-                    <Badge variant="secondary" className="uppercase tracking-wider text-[10px]">
-                      {card.type}
-                    </Badge>
-                    <Button 
-                      size="icon" 
-                      variant="ghost" 
-                      className="h-8 w-8 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-                      onClick={() => {
-                        if (confirm('Delete this card?')) {
-                          handleDelete(card.id)
-                        }
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant="secondary" className="uppercase tracking-wider text-[10px]">
+                        {card.type}
+                      </Badge>
+                      <Badge variant="outline" className="uppercase tracking-wider text-[10px]">
+                        {cardStateLabel(card)}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {due && (
+                        <Badge
+                          variant={due === 'Due now' ? 'destructive' : 'outline'}
+                          className="text-[10px]"
+                        >
+                          {due}
+                        </Badge>
+                      )}
+                      <Button 
+                        size="icon" 
+                        variant="ghost" 
+                        className="h-8 w-8 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                        onClick={() => {
+                          if (confirm('Delete this card?')) {
+                            handleDelete(card.id)
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
                   <div className="space-y-3">
                     <div className="space-y-1">
@@ -160,7 +170,8 @@ export default function LibraryPage() {
                   )}
                 </CardContent>
               </Card>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

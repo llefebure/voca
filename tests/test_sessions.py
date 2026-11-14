@@ -70,9 +70,7 @@ async def test_start_session_creates_active_session(client, fake_supabase):
 @pytest.mark.asyncio
 async def test_start_session_stamps_profile_language(client, fake_supabase):
     """The session inherits the language the profile points at — even non-default."""
-    fake_supabase.results[("profiles", "select")] = [
-        {"id": "user-1", "target_language": "fr"}
-    ]
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1", "target_language": "fr"}]
     response = await client.post("/sessions/start", headers=AUTH)
     assert response.status_code == 200
     assert fake_supabase.inserted_rows("sessions") == [
@@ -175,6 +173,17 @@ async def test_end_session_inserts_cards_and_updates_srs(
     assert card_updates[0]["values"]["next_review"]
     assert card_updates[0]["values"]["last_review"]
 
+    # Each graded card leaves an append-only review log row (positive recalls,
+    # review activity over time — fsrs_data keeps no counts).
+    review_rows = fake_supabase.inserted_rows("card_reviews")
+    assert len(review_rows) == 1
+    assert review_rows[0]["card_id"] == "card-1"
+    assert review_rows[0]["user_id"] == "user-1"
+    assert review_rows[0]["session_id"] == "sess-1"
+    assert review_rows[0]["language"] == "es"
+    assert review_rows[0]["rating"] == int(Rating.Good)
+    assert review_rows[0]["reviewed_at"]
+
     session_updates = fake_supabase.updated_rows("sessions")
     assert any(update["values"].get("status") == "completed" for update in session_updates)
     assert any("recap" in update["values"] for update in session_updates)
@@ -214,6 +223,7 @@ async def test_end_session_skips_not_attempted_cards(client, fake_supabase, monk
     assert fake_supabase.updated_rows("cards") == []
     assert fake_supabase.updated_rows("profiles") == []
     assert fake_supabase.upserted_rows("user_languages") == []
+    assert fake_supabase.inserted_rows("card_reviews") == []  # ungraded → no log row
 
 
 @pytest.mark.asyncio
@@ -239,6 +249,7 @@ async def test_end_session_uses_session_language(client, fake_supabase, monkeypa
 
     response = await client.post("/sessions/end", params={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
+    assert fake_supabase.inserted_rows("card_reviews") == []
     assert fake_supabase.select_filters_rows("cards")[-1] == {
         "user_id": "user-1",
         "language": "fr",

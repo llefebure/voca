@@ -31,7 +31,7 @@ from voca.services.srs import (
     VOCA_RATING_MAP,
     new_card_state,
     next_review,
-    update_card_state,
+    review_card_state,
 )
 from voca.services.supabase_client import supabase
 
@@ -383,7 +383,7 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
             continue
 
         current_state = res.data.get("fsrs_data") or new_card_state()
-        new_state = update_card_state(current_state, rating)
+        new_state, review_log = review_card_state(current_state, rating)
         await db(
             supabase.table("cards")
             .update(
@@ -394,6 +394,21 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
                 }
             )
             .eq("id", review.card_id)
+        )
+        # Append the graded review to the log so progress metrics (positive
+        # recalls, review activity over time) exist; fsrs_data keeps no counts.
+        # `session_id` lets recaps show the plan's chosen cards and this
+        # session's per-card results.
+        await db(
+            supabase.table("card_reviews").insert(
+                {
+                    "card_id": review.card_id,
+                    "user_id": user.id,
+                    "session_id": session["id"],
+                    "language": language,
+                    **review_log,
+                }
+            )
         )
 
     profile_updates = analysis.profile_updates.model_dump(exclude_none=True)

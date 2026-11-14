@@ -61,15 +61,6 @@ export default function HistoryPage() {
   return (
     <DashboardLayout title="Session History">
       <div className="mx-auto max-w-5xl space-y-8 p-4 md:p-8">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Title is already in DashboardLayout */}
-          </div>
-          <Button variant="outline" onClick={() => router.push('/')}>
-            Start New Session
-          </Button>
-        </div>
-
         {loading ? (
           <div className="flex h-64 items-center justify-center text-muted-foreground">Loading your history...</div>
         ) : sessions.length === 0 ? (

@@ -389,6 +389,16 @@ function ChatView({
     setEnding(true)
     try {
       stop()
+      // Archive the conversation immediately: from this moment the chat screen
+      // must look like an empty state however the request plays out — the recap
+      // redirect only lands when the analyst finishes, and navigating away
+      // before that must never resurrect the conversation (or its dialog).
+      sessionIdRef.current = null
+      lastSpokenRef.current = null
+      setSessionId(null)
+      setPlan(null)
+      setMessages([])
+      setInput('')
       const {
         data: { session },
       } = await supabase.auth.getSession()
@@ -401,15 +411,13 @@ function ChatView({
       if (!response.ok && response.status !== 409) {
         throw new Error('Failed to end the session')
       }
-      // Archive locally: the chat screen must be blank from the moment of
-      // ending — before, during, and regardless of how the redirect goes.
-      sessionIdRef.current = null
-      lastSpokenRef.current = null
-      setPlan(null)
-      setMessages([])
-      setInput('')
+      // Close the dialog on every path: an open modal has no meaning once the
+      // session is archived, and a lingering one would dead-end (no session
+      // left to end). The recap navigation completes this.
+      setConfirmEnd(false)
       router.push(`/recap/${currentSessionId}`)
     } catch (error) {
+      setConfirmEnd(false)
       toast({
         title: 'Error',
         description: error instanceof Error ? error.message : 'Failed to end the session',
@@ -453,21 +461,6 @@ function ChatView({
               }
             />
             <TooltipContent>New session</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setConfirmEnd(true)}
-                  disabled={!sessionId || streaming}
-                >
-                  <FlagIcon />
-                </Button>
-              }
-            />
-            <TooltipContent>End session &amp; recap</TooltipContent>
           </Tooltip>
         </div>
       </div>
@@ -611,21 +604,7 @@ function ChatView({
             className="min-h-7"
             rows={1}
           />
-          <InputGroupAddon align="block-end" className="justify-between">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <InputGroupButton
-                    variant="ghost"
-                    onClick={() => handleTranslate(input)}
-                    disabled={!input.trim()}
-                  >
-                    <LanguagesIcon />
-                  </InputGroupButton>
-                }
-              />
-              <TooltipContent>Translate draft</TooltipContent>
-            </Tooltip>
+          <InputGroupAddon align="block-end" className="justify-end">
             <InputGroupButton
               variant="default"
               onClick={() => handleSubmit()}
@@ -635,6 +614,21 @@ function ChatView({
             </InputGroupButton>
           </InputGroupAddon>
         </InputGroup>
+
+        {/* Ending is the step people miss: a slim full-width bar under the box,
+            impossible to miss while a session is open. */}
+        {sessionId && !streaming && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2 w-full rounded-[10px] border-destructive/30 bg-destructive/5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => setConfirmEnd(true)}
+            disabled={submitting}
+          >
+            <FlagIcon data-icon="inline-start" />
+            End session &amp; recap
+          </Button>
+        )}
       </form>
 
       <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>

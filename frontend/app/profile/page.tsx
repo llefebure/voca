@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useRouter } from 'next/navigation'
-import { Target, Settings, BookOpen, Save, X, TrendingUp } from 'lucide-react'
+import { Target, Settings, Save, X } from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { useLanguage } from '@/components/language-context'
 import { toast } from '@/components/ui/toast'
@@ -107,15 +107,6 @@ export default function ProfilePage() {
   return (
     <DashboardLayout title="My Profile">
       <div className="mx-auto max-w-4xl space-y-8 p-4 md:p-8">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Title is in DashboardLayout */}
-          </div>
-          <Button variant="outline" onClick={() => router.push('/')}>
-            Return to Chat
-          </Button>
-        </div>
-
         <div className="grid gap-6 md:grid-cols-3">
           <Card className="md:col-span-1 border-t-4 border-t-primary">
             <CardHeader>
@@ -207,25 +198,6 @@ export default function ProfilePage() {
             </CardContent>
           </Card>
         </div>
-
-        <Card className="border-t-4 border-t-primary/30">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <BookOpen className="h-5 w-5 text-muted-foreground" />
-              SRS Progress
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-col items-center justify-center py-12 text-center space-y-3">
-              <div className="bg-muted p-4 rounded-full">
-                <TrendingUp className="h-8 w-8 text-muted-foreground" />
-              </div>
-              <p className="text-muted-foreground italic">
-                Your spaced repetition progress will be visualized here.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
       </div>
     </DashboardLayout>
   )

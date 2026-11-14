@@ -101,9 +101,7 @@ async def test_chat_passes_effective_profile_to_tutor(client, monkeypatch, fake_
     fake_supabase.results[("profiles", "select")] = [
         {"id": "user-1", "level": "A2", "goals": "global"}
     ]
-    fake_supabase.results[("user_languages", "select")] = [
-        {"level": "B1", "goals": "fr goals"}
-    ]
+    fake_supabase.results[("user_languages", "select")] = [{"level": "B1", "goals": "fr goals"}]
     captured: dict[str, Any] = {}
 
     class CapturingTutor(FakeTutorAgent):
