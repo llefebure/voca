@@ -28,6 +28,9 @@ export default function LibraryPage() {
   const [cards, setCards] = useState<CardRow[]>([])
   const [filter, setFilter] = useState('')
   const [loading, setLoading] = useState(true)
+  // The due-badge clock is taken at fetch time in the effect — never at render
+  // (render-time `new Date()` is an unstable value under Next 16 prerendering).
+  const [now, setNow] = useState<Date | null>(null)
   const router = useRouter()
   // Cards belong to their session's language; the library shows the active one.
   const { activeLanguage, loading: languageLoading } = useLanguage()
@@ -51,6 +54,7 @@ export default function LibraryPage() {
 
         if (error) throw error
         setCards(data || [])
+        setNow(new Date())
       } catch (error) {
         console.error('Error fetching cards:', error)
       } finally {
@@ -126,7 +130,9 @@ export default function LibraryPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredCards.map((card) => (
+            {filteredCards.map((card) => {
+              const due = dueLabel(card, now)
+              return (
               <Card key={card.id} className="group hover:shadow-md transition-all border-t-2 border-t-transparent hover:border-t-primary">
                 <CardContent className="p-6 space-y-4">
                   <div className="flex items-start justify-between gap-2">
@@ -139,12 +145,12 @@ export default function LibraryPage() {
                       </Badge>
                     </div>
                     <div className="flex items-center gap-1.5">
-                      {dueLabel(card) && (
+                      {due && (
                         <Badge
-                          variant={dueLabel(card) === 'Due now' ? 'destructive' : 'outline'}
+                          variant={due === 'Due now' ? 'destructive' : 'outline'}
                           className="text-[10px]"
                         >
-                          {dueLabel(card)}
+                          {due}
                         </Badge>
                       )}
                       <Button 
@@ -179,7 +185,8 @@ export default function LibraryPage() {
                   )}
                 </CardContent>
               </Card>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

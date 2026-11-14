@@ -212,12 +212,14 @@ export function cardStateLabel(card: Pick<CardRow, 'fsrs_data'>): CardStateLabel
   return fsrs.state === 2 ? 'Review' : 'Learning' // Learning(1)/Relearning(3)
 }
 
-/** "Due now"/"Due <date>" copy for one card; null when it has no due date. */
+/** "Due now"/"Due <date>" copy for one card; null when it has no due date or
+ * clock. `now` must come from state/effect data — a default `new Date()` here
+ * would be an unstable render-time read (blocking-prerender-current-time). */
 export function dueLabel(
   card: Pick<CardRow, 'next_review'>,
-  now: Date = new Date(),
+  now: Date | null,
 ): string | null {
-  if (!card.next_review) return null
+  if (!card.next_review || !now) return null
   const due = new Date(card.next_review)
   const daysOut = differenceInCalendarDays(due, now)
   if (daysOut <= 0) return 'Due now'
