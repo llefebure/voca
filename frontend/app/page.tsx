@@ -615,20 +615,19 @@ function ChatView({
           </InputGroupAddon>
         </InputGroup>
 
-        {/* Ending is the step people miss: keep it visible next to the box the
-            whole time a session is open, not tucked in the header. */}
+        {/* Ending is the step people miss: a slim full-width bar under the box,
+            impossible to miss while a session is open. */}
         {sessionId && !streaming && (
-          <div className="mt-2 flex justify-end">
-            <Button
-              variant="outline"
-              className="rounded-full border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-              onClick={() => setConfirmEnd(true)}
-              disabled={submitting}
-            >
-              <FlagIcon data-icon="inline-start" />
-              End session &amp; recap
-            </Button>
-          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="mt-2 w-full rounded-[10px] border-destructive/30 bg-destructive/5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => setConfirmEnd(true)}
+            disabled={submitting}
+          >
+            <FlagIcon data-icon="inline-start" />
+            End session &amp; recap
+          </Button>
         )}
       </form>
 
