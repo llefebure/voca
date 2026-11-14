@@ -193,18 +193,6 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
               </p>
             ) : (
               <>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {plan.lesson?.topic
-                    ? `From today's lesson — ${plan.lesson.topic}${
-                        plan.lesson?.scenario ? ` (${plan.lesson.scenario})` : ''
-                      }. `
-                    : plan.lesson?.scenario
-                      ? `Scenario: ${plan.lesson.scenario}. `
-                      : ''}
-                  The tutor was briefed to weave these in; grades come from how the conversation
-                  went — &quot;Recalled&quot; means you produced or clearly recognized it, &quot;Missed&quot; means
-                  you forgot it.
-                </p>
                 <div className="grid gap-3">
                   {plan.cards.map((target) => {
                     const rating = gradeByTarget.get(target.id)
@@ -228,7 +216,7 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
                           </Badge>
                         ) : (
                           <Badge variant="secondary" className="shrink-0">
-                            Not brought up
+                            Not attempted
                           </Badge>
                         )}
                       </div>
