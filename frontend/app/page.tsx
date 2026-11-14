@@ -604,21 +604,7 @@ function ChatView({
             className="min-h-7"
             rows={1}
           />
-          <InputGroupAddon align="block-end" className="justify-between">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <InputGroupButton
-                    variant="ghost"
-                    onClick={() => handleTranslate(input)}
-                    disabled={!input.trim()}
-                  >
-                    <LanguagesIcon />
-                  </InputGroupButton>
-                }
-              />
-              <TooltipContent>Translate draft</TooltipContent>
-            </Tooltip>
+          <InputGroupAddon align="block-end" className="justify-end">
             <InputGroupButton
               variant="default"
               onClick={() => handleSubmit()}
