@@ -15,7 +15,8 @@ import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Activity, GraduationCap, Mic, TrendingUp } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { Activity, GraduationCap, Info, Mic, TrendingUp } from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { useLanguage } from '@/components/language-context'
 import {
@@ -40,7 +41,7 @@ import {
   CartesianGrid,
   Legend,
   ResponsiveContainer,
-  Tooltip,
+  Tooltip as ChartTooltip,
   XAxis,
   YAxis,
 } from 'recharts'
@@ -60,15 +61,35 @@ function StatTile({
   value,
   caption,
   danger,
+  tip,
 }: {
   label: string
   value: string | number
   caption?: string
   danger?: boolean
+  tip?: string
 }) {
   return (
     <div className="rounded-xl bg-muted/50 p-4 border text-center">
-      <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">{label}</p>
+      <p className="flex items-center justify-center gap-1 text-xs text-muted-foreground font-medium uppercase tracking-wider">
+        {label}
+        {tip && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  tabIndex={0}
+                  aria-label={`About ${label}`}
+                  className="inline-flex size-4 cursor-help items-center justify-center rounded text-muted-foreground/70 transition-colors hover:text-foreground focus-visible:outline-1 focus-visible:outline-ring"
+                >
+                  <Info className="size-3.5" />
+                </span>
+              }
+            />
+            <TooltipContent className="max-w-56 text-left leading-relaxed">{tip}</TooltipContent>
+          </Tooltip>
+        )}
+      </p>
       <p className={`text-3xl font-bold ${danger ? 'text-destructive' : ''}`}>{value}</p>
       {caption && <p className="text-xs text-muted-foreground mt-1">{caption}</p>}
     </div>
@@ -266,16 +287,19 @@ function ProgressContent({
               label="Sessions"
               value={fmt(speaking.sessions)}
               caption={`${speaking.sessionsPerDay.toFixed(1)} / day`}
+              tip="How many conversations you practiced in this range (every started session counts, ended or not)."
             />
             <StatTile
               label="Active days"
               value={fmt(speaking.activeDays)}
               caption={`of ${days} days`}
+              tip="Days in this range with at least one practice session."
             />
             <StatTile
               label="Words spoken"
               value={fmt(speaking.words)}
               caption={`${speaking.wordsPerDay.toFixed(1)} / day`}
+              tip="Everything you said across this range's sessions — read from each session's recap when it ends."
             />
           </div>
           <div className="h-56">
@@ -290,7 +314,7 @@ function ProgressContent({
                   minTickGap={18}
                 />
                 <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} allowDecimals={false} />
-                <Tooltip cursor={{ fill: 'var(--muted)', fillOpacity: 0.5 }} contentStyle={TOOLTIP_STYLE} />
+                <ChartTooltip cursor={{ fill: 'var(--muted)', fillOpacity: 0.5 }} contentStyle={TOOLTIP_STYLE} />
                 <Bar
                   dataKey="words"
                   name="Words spoken"
@@ -312,12 +336,21 @@ function ProgressContent({
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="grid gap-4 sm:grid-cols-3">
-            <StatTile label="Card reviews" value={fmt(rangeReviews.length)} />
+            <StatTile
+              label="Card reviews"
+              value={fmt(rangeReviews.length)}
+              tip="Graded reviews of study cards logged during this range's ended sessions."
+            />
             <StatTile
               label="Positive recalls"
               value={fmt(rangeReviewPositive)}
+              tip="Reviews where you produced or clearly recognized the card (graded Good or Easy)."
             />
-            <StatTile label="Recall rate" value={`${rangeRecallRate}%`} />
+            <StatTile
+              label="Recall rate"
+              value={`${rangeRecallRate}%`}
+              tip="Positive recalls out of all card reviews in this range."
+            />
           </div>
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
@@ -331,7 +364,7 @@ function ProgressContent({
                   minTickGap={18}
                 />
                 <YAxis tick={AXIS_TICK} tickLine={false} axisLine={false} allowDecimals={false} />
-                <Tooltip cursor={{ fill: 'var(--muted)', fillOpacity: 0.5 }} contentStyle={TOOLTIP_STYLE} />
+                <ChartTooltip cursor={{ fill: 'var(--muted)', fillOpacity: 0.5 }} contentStyle={TOOLTIP_STYLE} />
                 <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
                 <Bar
                   dataKey="positive"
@@ -362,28 +395,44 @@ function ProgressContent({
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <StatTile label="Total cards" value={fmt(snapshot.total)} />
+            <StatTile
+              label="Total cards"
+              value={fmt(snapshot.total)}
+              tip="Every review card built from your sessions for this language."
+            />
             <StatTile
               label="Due now"
               value={fmt(snapshot.dueNow)}
               danger={snapshot.dueNow > 0}
+              tip="Cards past their due date — plus new cards (they're born due). This is the pool the tutor picks review targets from."
             />
-            <StatTile label="New" value={fmt(snapshot.new)} />
+            <StatTile
+              label="New"
+              value={fmt(snapshot.new)}
+              tip="Created for you but never quizzed yet — they go into study immediately."
+            />
             <StatTile
               label="Learning"
               value={fmt(snapshot.learning)}
               caption="relearning included"
+              tip="Cards on short, minute-scale schedules — first learning steps, or a previously known card you forgot and are now relearning."
             />
-            <StatTile label="In review" value={fmt(snapshot.review)} />
+            <StatTile
+              label="In review"
+              value={fmt(snapshot.review)}
+              tip="Cards that graduated to long-term scheduling (days to months). They only drop back to learning if you miss one."
+            />
             <StatTile
               label="Recalls (all time)"
               value={fmt(snapshot.lifetimePositive)}
               caption={`of ${fmt(snapshot.lifetimeReviews)} reviews`}
+              tip="All-time logged reviews where you recalled the card (Good or Easy). Misses are logged too, just not counted here."
             />
             <StatTile
               label="Recall rate"
               value={`${Math.round(snapshot.recallRate * 100)}%`}
               caption="all time"
+              tip="All-time positive recalls out of every logged review for this language."
             />
           </div>
         </CardContent>

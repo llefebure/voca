@@ -179,6 +179,7 @@ async def test_end_session_inserts_cards_and_updates_srs(
     assert len(review_rows) == 1
     assert review_rows[0]["card_id"] == "card-1"
     assert review_rows[0]["user_id"] == "user-1"
+    assert review_rows[0]["session_id"] == "sess-1"
     assert review_rows[0]["language"] == "es"
     assert review_rows[0]["rating"] == int(Rating.Good)
     assert review_rows[0]["reviewed_at"]

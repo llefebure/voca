@@ -397,9 +397,17 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
         )
         # Append the graded review to the log so progress metrics (positive
         # recalls, review activity over time) exist; fsrs_data keeps no counts.
+        # `session_id` lets recaps show the plan's chosen cards and this
+        # session's per-card results.
         await db(
             supabase.table("card_reviews").insert(
-                {"card_id": review.card_id, "user_id": user.id, "language": language, **review_log}
+                {
+                    "card_id": review.card_id,
+                    "user_id": user.id,
+                    "session_id": session["id"],
+                    "language": language,
+                    **review_log,
+                }
             )
         )
 

@@ -8,12 +8,21 @@ import { Badge } from '@/components/ui/badge'
 import { useRouter } from 'next/navigation'
 import { CheckCircle, XCircle, BookOpen, ArrowRight, TrendingUp, Target } from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
+import { POSITIVE_RATING_MIN } from '@/lib/stats'
 
 type RecapData = {
   positives?: string[]
   key_corrections?: string[]
   next_time_preview?: string
   user_word_count?: number
+}
+
+// The session's stored plan (from POST /sessions/plan): the lesson plus the
+// review targets the tutor was briefed to weave into the conversation.
+type SessionPlanShape = {
+  lesson?: { template?: string; topic?: string; scenario?: string | null; objectives?: string[] }
+  opening_hook?: string
+  cards?: { id: string; front: string; back: string }[]
 }
 
 type CardRow = {
@@ -47,6 +56,8 @@ function RecapLoading() {
 function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = use(params)
   const [recap, setRecap] = useState<RecapData | null>(null)
+  const [plan, setPlan] = useState<SessionPlanShape | null>(null)
+  const [sessionReviews, setSessionReviews] = useState<{ card_id: string; rating: number }[]>([])
   const [cards, setCards] = useState<CardRow[]>([])
   const [loading, setLoading] = useState(true)
   const router = useRouter()
@@ -56,7 +67,7 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
       try {
         const { data: session } = await supabase
           .from('sessions')
-          .select('recap, user_id')
+          .select('recap, plan, user_id')
           .eq('id', sessionId)
           .single()
 
@@ -64,6 +75,13 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
           router.push('/')
           return
         }
+
+        // Reviews graded against this session's due cards (logged at end time.
+        // Rows without session_id predate the column — not shown per target).
+        const { data: sessionReviewsData } = await supabase
+          .from('card_reviews')
+          .select('card_id, rating')
+          .eq('session_id', sessionId)
 
         const { data: cardsData } = await supabase
           .from('cards')
@@ -73,6 +91,8 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
           .limit(10)
 
         setRecap((session.recap as RecapData) ?? null)
+        setPlan((session.plan as SessionPlanShape) ?? null)
+        setSessionReviews(sessionReviewsData ?? [])
         setCards(cardsData || [])
       } catch (error) {
         console.error('Error fetching recap:', error)
@@ -92,6 +112,11 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
     <DashboardLayout title="No Recap">
       <div className="flex h-full items-center justify-center text-muted-foreground">No recap found for this session.</div>
     </DashboardLayout>
+  )
+
+  // The planned targets, with this session's logged grade per card (if any).
+  const gradeByTarget = new Map<string, number>(
+    sessionReviews.map((row) => [row.card_id, row.rating]),
   )
 
   return (
@@ -151,6 +176,67 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
                 </ul>
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-xl flex items-center gap-2">
+              <Target className="h-5 w-5 text-primary" />
+              Session Targets
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {!plan?.cards || plan.cards.length === 0 ? (
+              <p className="text-muted-foreground italic text-center py-4">
+                This session had no planned review targets.
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {plan.lesson?.topic
+                    ? `From today's lesson — ${plan.lesson.topic}${
+                        plan.lesson?.scenario ? ` (${plan.lesson.scenario})` : ''
+                      }. `
+                    : plan.lesson?.scenario
+                      ? `Scenario: ${plan.lesson.scenario}. `
+                      : ''}
+                  The tutor was briefed to weave these in; grades come from how the conversation
+                  went — &quot;Recalled&quot; means you produced or clearly recognized it, &quot;Missed&quot; means
+                  you forgot it.
+                </p>
+                <div className="grid gap-3">
+                  {plan.cards.map((target) => {
+                    const rating = gradeByTarget.get(target.id)
+                    const recalled = rating != null && rating >= POSITIVE_RATING_MIN
+                    const missed = rating != null && !recalled
+                    return (
+                      <div key={target.id} className="flex items-center justify-between gap-3 rounded-xl border p-4 bg-card shadow-sm hover:shadow-md transition-shadow">
+                        <div className="space-y-0.5 min-w-0">
+                          <p className="text-sm font-semibold">{target.front}</p>
+                          <p className="text-xs text-muted-foreground truncate">{target.back}</p>
+                        </div>
+                        {recalled ? (
+                          <Badge className="shrink-0 bg-brand-green/25 text-success dark:bg-brand-green/15 dark:text-brand-green">
+                            <CheckCircle />
+                            Recalled
+                          </Badge>
+                        ) : missed ? (
+                          <Badge variant="destructive" className="shrink-0">
+                            <XCircle />
+                            Missed
+                          </Badge>
+                        ) : (
+                          <Badge variant="secondary" className="shrink-0">
+                            Not brought up
+                          </Badge>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
 
