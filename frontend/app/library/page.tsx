@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useRouter } from 'next/navigation'
-import { Search, BookOpen, GraduationCap, Trash2 } from 'lucide-react'
+import { Search, BookOpen, Trash2 } from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { useLanguage } from '@/components/language-context'
 import { toast } from '@/components/ui/toast'
@@ -91,15 +91,6 @@ export default function LibraryPage() {
   return (
     <DashboardLayout title="Card Library">
       <div className="mx-auto max-w-6xl space-y-8 p-4 md:p-8">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Title is in DashboardLayout */}
-          </div>
-          <Button variant="outline" onClick={() => router.push('/')}>
-            Start Practicing
-          </Button>
-        </div>
-
         <div className="flex gap-4">
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -109,12 +100,6 @@ export default function LibraryPage() {
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" className="hidden md:flex items-center gap-2 rounded-full">
-              <GraduationCap className="h-4 w-4" />
-              Filter by Level
-            </Button>
           </div>
         </div>
 

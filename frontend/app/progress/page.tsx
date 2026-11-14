@@ -12,7 +12,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -160,15 +159,6 @@ export default function ProgressPage() {
   return (
     <DashboardLayout title="Progress">
       <div className="mx-auto max-w-5xl space-y-8 p-4 md:p-8">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Title is in DashboardLayout */}
-          </div>
-          <Button variant="outline" onClick={() => router.push('/')}>
-            Start Practicing
-          </Button>
-        </div>
-
         {loadingPage || !now ? (
           <div className="flex h-64 items-center justify-center text-muted-foreground">
             Loading your progress...

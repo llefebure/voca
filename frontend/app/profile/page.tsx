@@ -107,15 +107,6 @@ export default function ProfilePage() {
   return (
     <DashboardLayout title="My Profile">
       <div className="mx-auto max-w-4xl space-y-8 p-4 md:p-8">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Title is in DashboardLayout */}
-          </div>
-          <Button variant="outline" onClick={() => router.push('/')}>
-            Return to Chat
-          </Button>
-        </div>
-
         <div className="grid gap-6 md:grid-cols-3">
           <Card className="md:col-span-1 border-t-4 border-t-primary">
             <CardHeader>

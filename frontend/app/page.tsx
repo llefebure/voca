@@ -462,21 +462,6 @@ function ChatView({
             />
             <TooltipContent>New session</TooltipContent>
           </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setConfirmEnd(true)}
-                  disabled={!sessionId || streaming}
-                >
-                  <FlagIcon />
-                </Button>
-              }
-            />
-            <TooltipContent>End session &amp; recap</TooltipContent>
-          </Tooltip>
         </div>
       </div>
 
@@ -643,6 +628,22 @@ function ChatView({
             </InputGroupButton>
           </InputGroupAddon>
         </InputGroup>
+
+        {/* Ending is the step people miss: keep it visible next to the box the
+            whole time a session is open, not tucked in the header. */}
+        {sessionId && !streaming && (
+          <div className="mt-2 flex justify-end">
+            <Button
+              variant="outline"
+              className="rounded-full border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => setConfirmEnd(true)}
+              disabled={submitting}
+            >
+              <FlagIcon data-icon="inline-start" />
+              End session &amp; recap
+            </Button>
+          </div>
+        )}
       </form>
 
       <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>
