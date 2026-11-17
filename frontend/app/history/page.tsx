@@ -9,6 +9,7 @@ import { Calendar, ArrowRight, Clock, FileText, MessageSquare } from 'lucide-rea
 import { format } from 'date-fns'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { useLanguage } from '@/components/language-context'
+import { BACKEND_URL } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 type SessionRow = {
@@ -38,7 +39,7 @@ export default function HistoryPage() {
         }
 
         const response = await fetch(
-          `http://localhost:8000/sessions?language=${encodeURIComponent(activeLanguage)}`,
+          `${BACKEND_URL}/sessions?language=${encodeURIComponent(activeLanguage)}`,
           {
             headers: {
               'Authorization': `Bearer ${session.access_token}`

@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent } from '@/components/ui/card'
 import { useRouter } from 'next/navigation'
-import { CheckCircle, Target, Mic, Settings, ChevronRight } from 'lucide-react'
+import { CheckCircle, Target, Mic, ChevronRight } from 'lucide-react'
 import { toast } from '@/components/ui/toast'
 import {
   DEFAULT_LANGUAGE,
@@ -15,7 +15,7 @@ import {
   UPCOMING_LANGUAGES,
 } from '@/lib/languages'
 
-type OnboardingStep = 'setup' | 'goals' | 'preferences' | 'complete'
+type OnboardingStep = 'setup' | 'goals' | 'complete'
 
 export default function OnboardingPage() {
   const [step, setStep] = useState<OnboardingStep>('setup')
@@ -23,23 +23,18 @@ export default function OnboardingPage() {
     target_language: DEFAULT_LANGUAGE as string,
     level: 'B1',
     goals: '',
-    interests: '',
-    correction_intensity: 'standard',
-    speech_speed: 'normal'
+    interests: ''
   })
   const router = useRouter()
 
   const steps: { id: OnboardingStep; label: string }[] = [
     { id: 'setup', label: 'Level' },
     { id: 'goals', label: 'Goals' },
-    { id: 'preferences', label: 'Tuning' },
   ]
   const stepIndex = steps.findIndex((s) => s.id === step)
 
   const nextStep = () => {
     if (step === 'setup') setStep('goals')
-    else if (step === 'goals') setStep('preferences')
-    else if (step === 'preferences') setStep('complete')
   }
 
   const completeOnboarding = async () => {
@@ -49,28 +44,28 @@ export default function OnboardingPage() {
     try {
       // `target_language` is the target-language pointer; the same wizard (re)runs
       // for a language (re)onboarding — its row lands in user_languages.
-      await supabase.from('profiles').upsert({
+      // supabase-js never throws on failed writes; errors come back in-band, so
+      // each result must be checked here or failures silently "succeed".
+      const { error: profilesError } = await supabase.from('profiles').upsert({
         id: user.id,
         target_language: formData.target_language,
         level: formData.level,
         goals: formData.goals,
-        interests: formData.interests,
-        preferences: {
-          correction_intensity: formData.correction_intensity,
-          speech_speed: formData.speech_speed
-        }
+        interests: formData.interests
       })
+      if (profilesError) throw profilesError
       // Per-language learner details live in user_languages (profile fallbacks stay
       // in profiles for pre-multi-language data). last_practiced_at is untouched so
       // re-onboarding never resets the practiced ordering.
-      await supabase.from('user_languages').upsert({
+      const { error: userLanguagesError } = await supabase.from('user_languages').upsert({
         user_id: user.id,
         language: formData.target_language,
         level: formData.level,
         goals: formData.goals,
         interests: formData.interests
       })
-      router.push('/')
+      if (userLanguagesError) throw userLanguagesError
+      setStep('complete')
     } catch {
       toast({
         title: "Setup Error",
@@ -185,53 +180,6 @@ export default function OnboardingPage() {
                     onChange={(e) => setFormData({...formData, interests: e.target.value})}
                     className="h-12 rounded-lg"
                   />
-                </div>
-              </div>
-              <Button className="w-full h-12 rounded-xl text-lg" onClick={nextStep}>
-                Continue <ChevronRight className="ml-2 h-5 w-5" />
-              </Button>
-            </div>
-          )}
-
-          {step === 'preferences' && (
-            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="text-center space-y-3">
-                <div className="mx-auto w-16 h-16 bg-primary/10 text-primary rounded-full flex items-center justify-center mb-4">
-                  <Settings className="h-8 w-8" />
-                </div>
-                <h2 className="text-2xl font-bold">Final Tuning</h2>
-                <p className="text-muted-foreground">Almost there! Let&apos;s fine-tune how the tutor interacts with you.</p>
-              </div>
-              <div className="space-y-6">
-                <div className="space-y-3">
-                  <Label>Correction Intensity</Label>
-                  <div className="grid grid-cols-3 gap-3">
-                    {['light', 'standard', 'strict'].map((opt) => (
-                      <Button 
-                        key={opt}
-                        variant={formData.correction_intensity === opt ? 'default' : 'outline'}
-                        className="capitalize"
-                        onClick={() => setFormData({...formData, correction_intensity: opt})}
-                      >
-                        {opt === 'light' ? 'Implicit' : opt === 'standard' ? 'Balanced' : 'Explicit'}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-                <div className="space-y-3">
-                  <Label>Tutor Speech Speed</Label>
-                  <div className="grid grid-cols-3 gap-3">
-                    {['slow', 'normal', 'fast'].map((opt) => (
-                      <Button 
-                        key={opt}
-                        variant={formData.speech_speed === opt ? 'default' : 'outline'}
-                        className="capitalize"
-                        onClick={() => setFormData({...formData, speech_speed: opt})}
-                      >
-                        {opt}
-                      </Button>
-                    ))}
-                  </div>
                 </div>
               </div>
               <Button className="w-full h-12 rounded-xl text-lg" onClick={completeOnboarding}>

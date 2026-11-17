@@ -15,6 +15,8 @@ type RecapData = {
   key_corrections?: string[]
   next_time_preview?: string
   user_word_count?: number
+  // The analyst's new cards for this session (always present; empty when none).
+  new_cards?: { type: string; front: string; back: string }[]
 }
 
 // The session's stored plan (from POST /sessions/plan): the lesson plus the
@@ -23,14 +25,6 @@ type SessionPlanShape = {
   lesson?: { template?: string; topic?: string; scenario?: string | null; objectives?: string[] }
   opening_hook?: string
   cards?: { id: string; front: string; back: string }[]
-}
-
-type CardRow = {
-  id: string
-  type: string
-  front: string
-  back: string
-  source_sentence?: string | null
 }
 
 export default function RecapPage({ params }: { params: Promise<{ sessionId: string }> }) {
@@ -58,7 +52,6 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
   const [recap, setRecap] = useState<RecapData | null>(null)
   const [plan, setPlan] = useState<SessionPlanShape | null>(null)
   const [sessionReviews, setSessionReviews] = useState<{ card_id: string; rating: number }[]>([])
-  const [cards, setCards] = useState<CardRow[]>([])
   const [loading, setLoading] = useState(true)
   const router = useRouter()
 
@@ -83,17 +76,9 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
           .select('card_id, rating')
           .eq('session_id', sessionId)
 
-        const { data: cardsData } = await supabase
-          .from('cards')
-          .select('*')
-          .eq('user_id', session.user_id)
-          .order('created_at', { ascending: false })
-          .limit(10)
-
         setRecap((session.recap as RecapData) ?? null)
         setPlan((session.plan as SessionPlanShape) ?? null)
         setSessionReviews(sessionReviewsData ?? [])
-        setCards(cardsData || [])
       } catch (error) {
         console.error('Error fetching recap:', error)
       } finally {
@@ -227,12 +212,12 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {cards.length === 0 ? (
+            {!recap.new_cards || recap.new_cards.length === 0 ? (
               <p className="text-muted-foreground italic text-center py-4">No new review cards this session.</p>
             ) : (
               <div className="grid gap-3">
-                {cards.map((card) => (
-                  <div key={card.id} className="flex items-center justify-between rounded-xl border p-4 bg-card shadow-sm hover:shadow-md transition-shadow">
+                {recap.new_cards.map((card, i) => (
+                  <div key={i} className="flex items-center justify-between rounded-xl border p-4 bg-card shadow-sm hover:shadow-md transition-shadow">
                     <div className="space-y-1">
                       <p className="text-sm font-semibold">{card.front}</p>
                       <p className="text-xs text-muted-foreground">{card.back}</p>
