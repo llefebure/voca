@@ -225,7 +225,7 @@ async def test_end_session_skips_not_attempted_cards(client, fake_supabase, monk
     response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
     assert fake_supabase.inserted_rows("cards") == []
-    # Only the completion update happened; no card/profile/recap updates.
+    # Only the completion update plus the recap write happened; no card/profile updates.
     assert fake_supabase.updated_rows("cards") == []
     assert fake_supabase.updated_rows("profiles") == []
     assert fake_supabase.upserted_rows("user_languages") == []
