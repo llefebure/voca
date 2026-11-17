@@ -71,8 +71,22 @@ export default function LibraryPage() {
 
   const handleDelete = async (id: string) => {
     try {
-      const { error } = await supabase.from('cards').delete().eq('id', id)
+      // RLS refusals and already-deleted rows delete zero rows without error, so
+      // a .select('id') round trip confirms the deletion actually happened.
+      const { data, error } = await supabase
+        .from('cards')
+        .delete()
+        .eq('id', id)
+        .select('id')
       if (error) throw error
+      if (!data || data.length === 0) {
+        toast({
+          title: "Card could not be deleted",
+          description: "Please refresh and try again.",
+          type: "error",
+        })
+        return
+      }
       setCards(cards.filter(c => c.id !== id))
       toast({
         title: "Card Deleted",

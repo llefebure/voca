@@ -212,10 +212,14 @@ function ChatView({
       const {
         data: { session },
       } = await supabase.auth.getSession()
-      const response = await fetch(
-        `${BACKEND_URL}/sessions/plan?session_id=${encodeURIComponent(id)}`,
-        { method: 'POST', headers: { Authorization: `Bearer ${session?.access_token}` } },
-      )
+      const response = await fetch(`${BACKEND_URL}/sessions/plan`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ session_id: id }),
+      })
       if (!response.ok) throw new Error(String(response.status))
       setPlan((await response.json()) as VocaSessionPlan)
     } catch {
@@ -402,10 +406,14 @@ function ChatView({
       const {
         data: { session },
       } = await supabase.auth.getSession()
-      const response = await fetch(
-        `${BACKEND_URL}/sessions/end?session_id=${encodeURIComponent(currentSessionId)}`,
-        { method: 'POST', headers: { Authorization: `Bearer ${session?.access_token}` } },
-      )
+      const response = await fetch(`${BACKEND_URL}/sessions/end`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ session_id: currentSessionId }),
+      })
       // 409 means the session was already ended (e.g. double click) — treat it
       // as success and still clear the page.
       if (!response.ok && response.status !== 409) {

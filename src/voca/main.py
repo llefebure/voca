@@ -8,6 +8,7 @@ newlines inside deltas cannot corrupt the stream. Serve this app with
 
 import asyncio
 import json
+import logging
 import os
 from datetime import UTC, datetime
 from typing import Any
@@ -39,6 +40,8 @@ load_dotenv()
 
 app = FastAPI(title="Voca Backend")
 
+logger = logging.getLogger("voca.main")
+
 # The Next.js dev/prod frontend is the only browser client we expect.
 _allowed_origins = os.getenv(
     "VOCA_FRONTEND_URLS", "http://localhost:3000,http://127.0.0.1:3000"
@@ -55,7 +58,7 @@ app.add_middleware(
 # --- Auth ---------------------------------------------------------------------------
 
 
-async def get_current_user(authorization: str | None = Header(None)):
+def get_current_user(authorization: str | None = Header(None)):
     """Resolve the Supabase JWT in the Authorization header to a user."""
     token = (authorization or "").removeprefix("Bearer ").strip()
     if not token:
@@ -127,16 +130,18 @@ def compact_cards(rows: list[dict[str, Any]]) -> list[dict[str, str | None]]:
     ]
 
 
-def get_owned_session(session_id: str, user_id: str) -> dict[str, Any]:
+async def get_owned_session(session_id: str, user_id: str) -> dict[str, Any]:
     """A session row the user owns, raising 404 otherwise."""
     try:
-        res = (
-            supabase.table("sessions")
-            .select("*")
-            .eq("id", session_id)
-            .eq("user_id", user_id)
-            .single()
-            .execute()
+        res = await asyncio.to_thread(
+            lambda: (
+                supabase.table("sessions")
+                .select("*")
+                .eq("id", session_id)
+                .eq("user_id", user_id)
+                .single()
+                .execute()
+            )
         )
     except APIError:
         raise HTTPException(status_code=404, detail="Session not found") from None
@@ -176,6 +181,10 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str
     history: list[dict[str, Any]] | None = None
+
+
+class SessionActionRequest(BaseModel):
+    session_id: str
 
 
 class TranslationRequest(BaseModel):
@@ -278,8 +287,8 @@ async def start_session(user=Depends(get_current_user)):
 
 
 @app.post("/sessions/plan")
-async def plan_session(session_id: str, user=Depends(get_current_user)):
-    session = get_owned_session(session_id, user.id)
+async def plan_session(request: SessionActionRequest, user=Depends(get_current_user)):
+    session = await get_owned_session(request.session_id, user.id)
     if session["status"] != "active":
         raise HTTPException(status_code=409, detail="Session has already ended")
 
@@ -310,9 +319,9 @@ async def plan_session(session_id: str, user=Depends(get_current_user)):
 
 
 @app.post("/sessions/end")
-async def end_session(session_id: str, user=Depends(get_current_user)):
+async def end_session(request: SessionActionRequest, user=Depends(get_current_user)):
     """Mark the session completed and run the post-session analyst."""
-    session = get_owned_session(session_id, user.id)
+    session = await get_owned_session(request.session_id, user.id)
     if session["status"] != "active":
         raise HTTPException(status_code=409, detail="Session has already ended")
     now = datetime.now(UTC).isoformat()
@@ -357,8 +366,6 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
                         "source_sentence": card.source_sentence,
                         # The card belongs to the session's language.
                         "language": language,
-                        # `state` is a plain label; the FSRS schedule lives in `fsrs_data`.
-                        "state": "new",
                         "fsrs_data": new_card_state(),
                         "next_review": now,  # new cards are due immediately
                     }
@@ -428,6 +435,11 @@ async def end_session(session_id: str, user=Depends(get_current_user)):
         for message in (transcript.data or [])
         if message.get("speaker") == "user"
     )
+    # Always present so the recap page can render review material without
+    # re-querying the cards table (empty when nothing was created).
+    recap["new_cards"] = [
+        {"type": c.type, "front": c.front, "back": c.back} for c in analysis.new_cards
+    ]
     await db(supabase.table("sessions").update({"recap": recap}).eq("id", session["id"]))
 
     return {
@@ -449,7 +461,7 @@ async def translate_text(request: TranslationRequest):
 
 @app.post("/chat")
 async def chat(request: ChatRequest, user=Depends(get_current_user)):
-    session = get_owned_session(request.session_id, user.id)
+    session = await get_owned_session(request.session_id, user.id)
     if session["status"] != "active":
         raise HTTPException(status_code=409, detail="Session has already ended")
     profile = await asyncio.to_thread(fetch_effective_profile, user.id, session.get("language"))
@@ -480,8 +492,11 @@ async def chat(request: ChatRequest, user=Depends(get_current_user)):
                 async for delta in result.stream_text(delta=True):
                     full_response += delta
                     yield sse({"type": "delta", "text": delta})
-        except Exception as exc:
-            yield sse({"type": "error", "message": str(exc)})
+        except Exception:
+            logger.exception("chat stream failed")
+            yield sse(
+                {"type": "error", "message": "The tutor hit an unexpected error. Please try again."}
+            )
         finally:
             # Save whatever the tutor produced, even if the stream failed mid-way.
             if full_response:

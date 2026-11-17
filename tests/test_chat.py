@@ -172,9 +172,9 @@ async def test_chat_yields_error_event_on_backend_failure(client, monkeypatch, f
     events = [
         json.loads(line[len("data: ") :]) for line in response.text.strip().splitlines() if line
     ]
-    assert events[-1]["type"] == "done"
     assert events[-2]["type"] == "error"
-    assert "exploded" in events[-2]["message"]
+    # Internal error details stay on the server; the client gets a stable message.
+    assert events[-2]["message"] == "The tutor hit an unexpected error. Please try again."
     assert events[-1]["type"] == "done"
 
 

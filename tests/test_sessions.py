@@ -120,7 +120,7 @@ async def test_list_sessions_filters_by_language(client, fake_supabase):
 
 @pytest.mark.asyncio
 async def test_end_session_requires_existing_session(client, fake_supabase):
-    response = await client.post("/sessions/end", params={"session_id": "missing"}, headers=AUTH)
+    response = await client.post("/sessions/end", json={"session_id": "missing"}, headers=AUTH)
     assert response.status_code == 404
 
 
@@ -146,20 +146,22 @@ async def test_end_session_inserts_cards_and_updates_srs(
 
     monkeypatch.setattr(voca_main.post_session_agent, "run", fake_run)
 
-    response = await client.post("/sessions/end", params={"session_id": "sess-1"}, headers=AUTH)
+    response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
     body = response.json()
     assert body["new_cards_count"] == 1
     assert body["recap"]["next_time_preview"] == "restaurant role play"
     # "Words you spoke" is computed from the transcript, not invented by the model.
     assert body["recap"]["user_word_count"] == 5
-
-    # New cards: labelled `new`, FSRS state in its own column, due immediately,
+    # The recap always carries `new_cards` so the recap page need not re-query cards.
+    assert body["recap"]["new_cards"] == [
+        {"type": "phrase", "front": "I am exhausted", "back": "estoy agotado"}
+    ]
+    # New cards: FSRS state in its own column, due immediately,
     # and stamped with the session's language.
     inserted_cards = fake_supabase.inserted_rows("cards")
     assert len(inserted_cards) == 1
     card_row = inserted_cards[0]
-    assert card_row["state"] == "new"
     assert card_row["fsrs_data"]  # FSRS state JSON persisted in the dedicated column
     assert card_row["next_review"]
     assert card_row["back"] == "estoy agotado"
@@ -186,7 +188,11 @@ async def test_end_session_inserts_cards_and_updates_srs(
 
     session_updates = fake_supabase.updated_rows("sessions")
     assert any(update["values"].get("status") == "completed" for update in session_updates)
-    assert any("recap" in update["values"] for update in session_updates)
+    recap_update = next(update for update in session_updates if "recap" in update["values"])
+    # The stored recap carries the same new_cards payload as the response.
+    assert recap_update["values"]["recap"]["new_cards"] == [
+        {"type": "phrase", "front": "I am exhausted", "back": "estoy agotado"}
+    ]
     # Per-language profile upgrades go to user_languages, not profiles.
     assert fake_supabase.upserted_rows("user_languages") == [
         {"user_id": "user-1", "language": "es", "interests": "architecture"}
@@ -216,14 +222,19 @@ async def test_end_session_skips_not_attempted_cards(client, fake_supabase, monk
     ]
     fake_supabase.results[("transcripts", "select")] = []
 
-    response = await client.post("/sessions/end", params={"session_id": "sess-1"}, headers=AUTH)
+    response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
     assert fake_supabase.inserted_rows("cards") == []
-    # Only the completion update happened; no card/profile/recap updates.
+    # Only the completion update plus the recap write happened; no card/profile updates.
     assert fake_supabase.updated_rows("cards") == []
     assert fake_supabase.updated_rows("profiles") == []
     assert fake_supabase.upserted_rows("user_languages") == []
     assert fake_supabase.inserted_rows("card_reviews") == []  # ungraded → no log row
+    # `new_cards` is present (empty) in the stored recap even with no cards.
+    recap_update = next(
+        update for update in fake_supabase.updated_rows("sessions") if "recap" in update["values"]
+    )
+    assert recap_update["values"]["recap"]["new_cards"] == []
 
 
 @pytest.mark.asyncio
@@ -247,7 +258,7 @@ async def test_end_session_uses_session_language(client, fake_supabase, monkeypa
     ]
     fake_supabase.results[("transcripts", "select")] = []
 
-    response = await client.post("/sessions/end", params={"session_id": "sess-1"}, headers=AUTH)
+    response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
     assert fake_supabase.inserted_rows("card_reviews") == []
     assert fake_supabase.select_filters_rows("cards")[-1] == {
@@ -289,7 +300,7 @@ async def test_plan_session_stores_plan(client, fake_supabase, monkeypatch):
         {"id": "card-1", "front": "exhausted", "back": "agotado", "fsrs_data": new_card_state()}
     ]
 
-    response = await client.post("/sessions/plan", params={"session_id": "sess-1"}, headers=AUTH)
+    response = await client.post("/sessions/plan", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
     body = response.json()
     assert body["opening_hook"] == "¡Hola Alex!"
@@ -305,17 +316,32 @@ async def test_plan_rejects_ended_session(client, fake_supabase):
     fake_supabase.results[("sessions", "select")] = [
         {"id": "sess-1", "user_id": "user-1", "status": "completed"}
     ]
-    response = await client.post("/sessions/plan", params={"session_id": "sess-1"}, headers=AUTH)
+    response = await client.post("/sessions/plan", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 409
 
 
 @pytest.mark.asyncio
-async def test_end_session_rejects_already_ended(client, fake_supabase):
+async def test_end_session_rejects_already_ended_without_rerunning_agents(
+    client, fake_supabase, monkeypatch
+):
+    """A completed session cannot be ended twice; the analyst must never run again."""
+    calls = 0
+
+    async def fail_run(_prompt, deps=None):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("post-session agent ran on an already-ended session")
+
+    monkeypatch.setattr(voca_main.post_session_agent, "run", fail_run)
     fake_supabase.results[("sessions", "select")] = [
         {"id": "sess-1", "user_id": "user-1", "status": "completed"}
     ]
-    response = await client.post("/sessions/end", params={"session_id": "sess-1"}, headers=AUTH)
+    response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 409
+    assert calls == 0
+    # No transcript fetch or card writes happened either.
+    assert fake_supabase.select_filters_rows("transcripts") == []
+    assert fake_supabase.inserted_rows("cards") == []
 
 
 @pytest.mark.asyncio
