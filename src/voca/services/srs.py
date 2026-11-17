@@ -45,11 +45,6 @@ def review_card_state(
     )
 
 
-def update_card_state(state_json: str, rating: Rating, when: datetime | None = None) -> str:
-    """Apply a review rating to a card and return the updated FSRS state JSON."""
-    return review_card_state(state_json, rating, when)[0]
-
-
 def next_review(state_json: str) -> datetime:
     """The due date of the card with this FSRS state."""
     return Card.from_dict(json.loads(state_json)).due
