@@ -22,6 +22,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "dummy-service-role-key")
 class FakeResult:
     data: Any = None
     error: Any = None
+    count: Any = None
 
 
 @dataclass
@@ -46,8 +47,9 @@ class FakeSupabaseQuery:
     payload: Any = None
 
     # --- builder methods (all return self, like the real client) ---
-    def select(self, *_args: Any, **_kwargs: Any) -> FakeSupabaseQuery:
+    def select(self, *_args: Any, **kwargs: Any) -> FakeSupabaseQuery:
         self.operation = "select"
+        self.wants_count = kwargs.get("count") is not None
         return self
 
     def insert(self, values: Any, **_kwargs: Any) -> FakeSupabaseQuery:
@@ -85,6 +87,10 @@ class FakeSupabaseQuery:
     def limit(self, *_args: Any, **_kwargs: Any) -> FakeSupabaseQuery:
         return self
 
+    def range(self, first: int, last: int) -> FakeSupabaseQuery:
+        self._range = (first, last)
+        return self
+
     def single(self) -> FakeSupabaseQuery:
         self._single = True
         return self
@@ -107,17 +113,27 @@ class FakeSupabaseQuery:
         # `.single()`/`.maybe_single()` return the row itself, not a list.
         if getattr(self, "_single", False) and isinstance(data, list):
             data = data[0] if data else None
+        # `.range(first, last)` slices the full result like PostgREST does.
+        full_data = data
+        rng = getattr(self, "_range", None)
+        if rng and isinstance(data, list):
+            data = data[rng[0] : rng[1] + 1]
         # Record select filters after builder completion, so assertions can check
         # query scoping (e.g. the language filter on cards/sessions selects).
         if self.operation == "select":
             self.client.select_filters.setdefault(self.table, []).append(dict(self.filters))
+            if rng:
+                self.client.select_ranges.setdefault(self.table, []).append(rng)
         # Record update rows after builder completion, so filters applied after
         # `.update(...)` (e.g. `.eq("id", …)`) are captured.
         if self.operation == "update":
             self.client.updated.setdefault(self.table, []).append(
                 {"values": self.payload, "filters": dict(self.filters)}
             )
-        return FakeResult(data=data)
+        return FakeResult(
+            data=data,
+            count=len(full_data) if getattr(self, "wants_count", False) else None,
+        )
 
 
 @dataclass
@@ -129,6 +145,7 @@ class FakeSupabase:
     upserted: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     updated: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     select_filters: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    select_ranges: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
     auth: FakeAuth = field(default_factory=FakeAuth)
 
     def table(self, name: str) -> FakeSupabaseQuery:
@@ -145,6 +162,9 @@ class FakeSupabase:
 
     def select_filters_rows(self, table: str) -> list[dict[str, Any]]:
         return self.select_filters.get(table, [])
+
+    def select_ranges_rows(self, table: str) -> list[tuple[int, int]]:
+        return self.select_ranges.get(table, [])
 
 
 @pytest.fixture
