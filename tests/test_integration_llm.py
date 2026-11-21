@@ -102,3 +102,73 @@ async def test_post_session_produces_valid_analysis():
     for grade in analysis.reviewed_cards:
         assert grade.card_id in valid_ids
     assert analysis.recap.next_time_preview.strip()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_post_session_correct_confident_transcript_yields_no_cards():
+    """Harvest rule: with no mistakes and no questions, 0 cards is the correct output."""
+    deps = {
+        "user_id": "user-1",
+        "session_id": "session-1",
+        "target_language": "es",
+        "existing_cards": [{"front": "the bill / check", "back": "la cuenta"}],
+        "transcript": [
+            {"speaker": "tutor", "text": "¡Hola Alex! ¿Cómo estás hoy?"},
+            {
+                "speaker": "user",
+                "text": "Hola, estoy muy bien, gracias. Hoy quiero hablar "
+                "de mi viaje a Oaxaca el año pasado.",
+            },
+            {"speaker": "tutor", "text": "¡Qué bonito! ¿Qué fue lo mejor de tu viaje?"},
+            {
+                "speaker": "user",
+                "text": "Lo mejor fue la comida. Probé el mole en un "
+                "mercado pequeño y era delicioso. También conocí a mucha gente amable.",
+            },
+            {
+                "speaker": "tutor",
+                "text": "Perfecto, tu español suena muy natural. ¿Volverías a Oaxaca?",
+            },
+            {
+                "speaker": "user",
+                "text": "Sí, definitivamente volvería. Me encantaría "
+                "explorar más pueblos cerca de la ciudad.",
+            },
+        ],
+        "due_cards": [],
+    }
+    result = await post_session_agent.run("Analyze the session.", deps=deps)  # type: ignore[arg-type]
+    assert isinstance(result.output, PostSessionResult)
+    assert result.output.new_cards == []
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_post_session_corrected_item_yields_card_citing_transcript():
+    """Harvest rule: a tutor correction produces a card citing the transcript line."""
+    transcript = [
+        {"speaker": "tutor", "text": "¡Hola Alex! ¿Qué hiciste el fin de semana?"},
+        {"speaker": "user", "text": "Yo comí tacos en la fiesta y yo mucho me divertí."},
+        {
+            "speaker": "tutor",
+            "text": "Casi: decimos 'me divertí mucho'. Y también puedes decir "
+            "'la pasé genial'. ¿Con quién fuiste?",
+        },
+        {"speaker": "user", "text": "Fui con mi hermana. ¿Qué tiempo hace para ir al cine?"},
+    ]
+    deps = {
+        "user_id": "user-1",
+        "session_id": "session-1",
+        "target_language": "es",
+        "existing_cards": [],
+        "transcript": transcript,
+        "due_cards": [],
+    }
+    result = await post_session_agent.run("Analyze the session.", deps=deps)  # type: ignore[arg-type]
+    assert isinstance(result.output, PostSessionResult)
+    assert result.output.new_cards, "a corrected item must become at least one card"
+    transcript_text = " ".join(message["text"] for message in transcript)
+    for card in result.output.new_cards:
+        # Cards must cite real transcript lines, not invent sentences.
+        assert card.source_sentence in transcript_text

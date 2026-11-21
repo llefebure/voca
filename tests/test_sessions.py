@@ -311,6 +311,157 @@ async def test_end_session_uses_session_language(client, fake_supabase, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_end_session_drops_candidates_matching_existing_cards(
+    client, fake_supabase, monkeypatch
+):
+    """Backstop: a candidate whose front/back matches an existing card is never written."""
+    result = PostSessionResult(
+        new_cards=[
+            # Punctuation/case variants of the user's existing card — must be dropped.
+            CardCandidate(
+                type="phrase",
+                front="I am Exhausted!",
+                back="estoy agotado",
+                source_sentence="estoy muy agotado hoy",
+                reason="(a): learner hesitated",
+            ),
+            # Genuinely new content — survives the backstop.
+            CardCandidate(
+                type="phrase",
+                front="la cuenta",
+                back="the bill",
+                source_sentence="¿La cuenta, por favor?",
+                reason="(c): tutor offered 'la cuenta' instead of improvised phrasing",
+            ),
+        ],
+        reviewed_cards=[],
+        recap=SessionRecap(positives=[], key_corrections=[], next_time_preview="next"),
+        profile_updates=ProfileUpdates(),
+    )
+
+    async def fake_run(_prompt, deps=None):
+        # The read-only recent-cards feed is front/back only, language-scoped.
+        assert all(set(card) == {"front", "back"} for card in deps["existing_cards"])
+        return type("R", (), {"output": result})()
+
+    monkeypatch.setattr(voca_main.post_session_agent, "run", fake_run)
+    fake_supabase.results[("sessions", "select")] = [
+        {"id": "sess-1", "user_id": "user-1", "status": "active", "language": "es"}
+    ]
+    fake_supabase.results[("transcripts", "select")] = []
+    # The same rows feed both the due-card lookup and the recent-cards select;
+    # front/back-only rows keep `existing_cards` compact like the real select.
+    fake_supabase.results[("cards", "select")] = [
+        {"front": "I am exhausted", "back": "estoy agotado"}
+    ]
+
+    response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
+    assert response.status_code == 200
+    assert response.json()["new_cards_count"] == 1
+    # Only the non-duplicating candidate reached the cards table.
+    inserted_cards = fake_supabase.inserted_rows("cards")
+    assert [card["front"] for card in inserted_cards] == ["la cuenta"]
+    # The recap's new_cards payload keeps its exact shape, minus the dropped card.
+    assert response.json()["recap"]["new_cards"] == [
+        {"type": "phrase", "front": "la cuenta", "back": "the bill"}
+    ]
+    # The recent-cards select was scoped to the user and the session's language.
+    assert fake_supabase.select_filters_rows("cards")[-1] == {
+        "user_id": "user-1",
+        "language": "es",
+    }
+
+
+@pytest.mark.asyncio
+async def test_end_session_collapses_duplicate_candidates(client, fake_supabase, monkeypatch):
+    """Repeated items yield one card, even when the model repeats itself."""
+    result = PostSessionResult(
+        new_cards=[
+            CardCandidate(
+                type="word",
+                front="gato",
+                back="cat",
+                source_sentence="El gato duerme.",
+                reason="(a): asked 'what does gato mean?'",
+            ),
+            CardCandidate(
+                type="word",
+                front="GATO",
+                back="cat",
+                source_sentence="el gato duerme",
+                reason="(a): asked again later",
+            ),
+            CardCandidate(
+                type="correction",
+                front="un tacos",
+                back="unos tacos",
+                source_sentence="Quisiero un tacos de pastor.",
+                reason="(b): tutor reformulated to 'unos tacos'",
+            ),
+        ],
+        reviewed_cards=[],
+        recap=SessionRecap(positives=[], key_corrections=[], next_time_preview="next"),
+        profile_updates=ProfileUpdates(),
+    )
+
+    async def fake_run(_prompt, deps=None):
+        return type("R", (), {"output": result})()
+
+    monkeypatch.setattr(voca_main.post_session_agent, "run", fake_run)
+    fake_supabase.results[("sessions", "select")] = [
+        {"id": "sess-1", "user_id": "user-1", "status": "active", "language": "es"}
+    ]
+    fake_supabase.results[("transcripts", "select")] = []
+    fake_supabase.results[("cards", "select")] = []
+
+    response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
+    assert response.status_code == 200
+    assert response.json()["new_cards_count"] == 2
+    inserted_cards = fake_supabase.inserted_rows("cards")
+    assert [card["front"] for card in inserted_cards] == ["gato", "un tacos"]
+
+
+# --- Deterministic card-harvest backstop -----------------------------------------
+
+
+def test_harvest_new_cards_caps_at_five_cards():
+    candidates = [
+        CardCandidate(
+            type="word",
+            front=f"word-{index}",
+            back=f"palabra-{index}",
+            source_sentence="s",
+            reason="(b): tutor correction",
+        )
+        for index in range(7)
+    ]
+    kept = voca_main.harvest_new_cards(candidates, [])
+    assert len(kept) == 5
+    assert [card.front for card in kept] == [f"word-{index}" for index in range(5)]
+
+
+def test_harvest_new_cards_normalizes_before_matching():
+    """Case and punctuation cannot smuggle a duplicate past the backstop."""
+    existing = [{"front": "I am exhausted", "back": "¡Estoy agotado!"}]
+    duplicate = CardCandidate(
+        type="phrase",
+        front="i am EXHAUSTED",
+        back="estoy… agotado",
+        source_sentence="s",
+        reason="(a): asked for it",
+    )
+    fresh = CardCandidate(
+        type="phrase",
+        front="tener sed",
+        back="to be thirsty",
+        source_sentence="s",
+        reason="(a): asked 'how do you say thirsty?'",
+    )
+    kept = voca_main.harvest_new_cards([duplicate, fresh], existing)
+    assert [card.front for card in kept] == ["tener sed"]
+
+
+@pytest.mark.asyncio
 async def test_plan_session_stores_plan(client, fake_supabase, monkeypatch):
     plan = SessionPlan(
         lesson=LessonSpec(

@@ -131,11 +131,38 @@ def test_post_session_agent_shapes_transcript_and_cards():
             {"speaker": "tutor", "text": "Se dice 'estoy agotado'."},
         ],
         "due_cards": [{"id": "card-1", "front": "exhausted", "back": "agotado"}],
+        "existing_cards": [
+            {"front": "the bill / check", "back": "la cuenta"},
+            {"front": "I am exhausted", "back": "estoy agotado"},
+        ],
     }
     injected = inject_post_session_deps(_StubRunContext(deps))
     assert "estoy agotado" in injected
     assert "card-1" in injected
+    # Existing cards are injected front/back-only (no IDs, no FSRS state) with a
+    # do-not-duplicate instruction for the NEW CARDS harvest.
+    assert "EXISTING CARDS" in injected
+    assert "la cuenta" in injected
+    assert "never create a card" in injected
     assert "SESSION PLAN: " in injected  # absent plan renders as a placeholder
+
+
+def test_post_session_agent_instructions_allow_zero_cards():
+    """The harvest rules: 0-5 cards, criteria-gated, no confident-use cards."""
+    from voca.agents.post_session_agent import NEW_CARDS_RULES as rules
+
+    assert "0-5 new cards" in rules
+    assert "An empty list is a good result" in rules
+    # Criteria (a)/(b)/(c) with example transcript signals.
+    assert "UNCERTAINTY" in rules and "¿cómo se dice…?" in rules
+    assert "INCORRECT USE" in rules and "reformulation" in rules
+    assert "BETTER ALTERNATIVE" in rules
+    # Hard exclusions and the source/reason requirements.
+    assert "Hard exclusions" in rules
+    assert "correctly and confidently" in rules
+    assert "EXISTING CARD" in rules
+    assert "criterion" in rules
+    assert "ONE card" in rules
 
 
 def test_post_session_agent_injects_plan():

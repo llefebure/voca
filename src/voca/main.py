@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
-from voca.agents.post_session_agent import post_session_agent
+from voca.agents.post_session_agent import CardCandidate, post_session_agent
 from voca.agents.session_planner_agent import session_planner_agent
 from voca.agents.tutor_agent import TutorDeps, tutor_agent
 from voca.services.languages import DEFAULT_LANGUAGE
@@ -130,6 +130,17 @@ def compact_cards(rows: list[dict[str, Any]]) -> list[dict[str, str | None]]:
     ]
 
 
+def fetch_recent_cards(
+    user_id: str, language: str | None = None, limit: int = 300
+) -> list[dict[str, Any]]:
+    """The user's most recent cards for `language`, front/back only (read-only select)."""
+    query = supabase.table("cards").select("front, back").eq("user_id", user_id)
+    if language:
+        query = query.eq("language", language)
+    res = query.order("created_at", desc=True).limit(limit).execute()
+    return res.data or []
+
+
 async def get_owned_session(session_id: str, user_id: str) -> dict[str, Any]:
     """A session row the user owns, raising 404 otherwise."""
     try:
@@ -159,6 +170,40 @@ def insert_transcript(session_id: str, speaker: str, text: str) -> None:
 def sse(event: dict[str, Any]) -> str:
     """Format one SSE frame; JSON-encoding keeps newlines inside deltas safe."""
     return f"data: {json.dumps(event)}\n\n"
+
+
+# The analyst is prompted for 0-5 cards; this cap also holds if it over-produces.
+MAX_NEW_CARDS = 5
+
+
+def normalized_card_text(text: str) -> str:
+    """Casefolded text without punctuation, for card-duplicate matching."""
+    cleaned = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text.casefold())
+    return " ".join(cleaned.split())
+
+
+def harvest_new_cards(
+    candidates: list[CardCandidate], existing_cards: list[dict[str, Any]]
+) -> list[CardCandidate]:
+    """Deterministic backstop for the analyst's card harvest — don't trust the prompt.
+
+    Drops any candidate whose normalized front or back matches an existing card or an
+    already-accepted candidate from this same session (repeated items yield one card),
+    and caps the result at `MAX_NEW_CARDS`.
+    """
+    seen: set[str] = set()
+    for row in existing_cards:
+        for field in ("front", "back"):
+            text = (row.get(field) or "").strip()
+            if text:
+                seen.add(normalized_card_text(text))
+    kept: list[CardCandidate] = []
+    for card in candidates:
+        forms = [normalized_card_text(text) for text in (card.front, card.back) if text.strip()]
+        if forms and seen.isdisjoint(forms):
+            seen.update(forms)
+            kept.append(card)
+    return kept[:MAX_NEW_CARDS]
 
 
 # --- Models ---------------------------------------------------------------------------
@@ -340,7 +385,10 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
         .order("created_at")
     )
     language = session.get("language")
-    due_cards = await asyncio.to_thread(fetch_due_cards, user.id, language)
+    due_cards, existing_cards = await asyncio.gather(
+        asyncio.to_thread(fetch_due_cards, user.id, language),
+        asyncio.to_thread(fetch_recent_cards, user.id, language),
+    )
 
     result = await post_session_agent.run(
         "Analyze the session and generate cards and recap.",
@@ -349,11 +397,15 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
             "session_id": session["id"],
             "transcript": transcript.data or [],
             "due_cards": compact_cards(due_cards),
+            "existing_cards": existing_cards,
             "target_language": language,
             "session_plan": session.get("plan"),
         },
     )
     analysis = result.output
+    # Backstop: drop duplicates of existing/accepted cards and anything past the cap
+    # before either writing rows or putting cards in the recap.
+    new_cards = harvest_new_cards(analysis.new_cards, existing_cards)
 
     await db(
         supabase.table("sessions")
@@ -361,7 +413,7 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
         .eq("id", session["id"])
     )
 
-    if analysis.new_cards:
+    if new_cards:
         await db(
             supabase.table("cards").insert(
                 [
@@ -376,7 +428,7 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
                         "fsrs_data": new_card_state(),
                         "next_review": now,  # new cards are due immediately
                     }
-                    for card in analysis.new_cards
+                    for card in new_cards
                 ]
             )
         )
@@ -444,15 +496,13 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
     )
     # Always present so the recap page can render review material without
     # re-querying the cards table (empty when nothing was created).
-    recap["new_cards"] = [
-        {"type": c.type, "front": c.front, "back": c.back} for c in analysis.new_cards
-    ]
+    recap["new_cards"] = [{"type": c.type, "front": c.front, "back": c.back} for c in new_cards]
     await db(supabase.table("sessions").update({"recap": recap}).eq("id", session["id"]))
 
     return {
         "status": "session ended",
         "recap": recap,
-        "new_cards_count": len(analysis.new_cards),
+        "new_cards_count": len(new_cards),
     }
 
 
