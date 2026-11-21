@@ -54,3 +54,14 @@ frontend/tests/      # Vitest + RTL suite (offline: supabase + backend fetch moc
 - When touching something only the real browser catches (hydration, real Supabase wiring), also run the browser smoke via `uv run task test:e2e` with `uv run task dev` up — always through the task, never bare `npx playwright test` (the task is what exports the seeder's env). The E2E suite self-seeds its test user (`e2e-test@voca.local`) into local Supabase.
 - Plan documents live in `plans/` (e.g. `plans/<short-name>.md`), never at the repo root — one file per plan, same filename across revisions.
 - Do the work on a dedicated feature branch cut from `main` (e.g. `feature/<short-name>`, or `fix/<short-name>` for bug fixes); do not commit directly to `main`.
+
+## Parallel agents in git worktrees (Supabase stack mode)
+
+Supabase runs with `experimental.stack = true` (in `supabase/config.toml`): every git worktree/branch gets its own local Supabase project — own containers, auto-assigned stable ports, own DB and migration history, own keys. No port or data collisions across parallel agents.
+
+- `uv run task worktree:new -- feature/<short-name>` — creates `.worktrees/<name>` (from `main`), installs deps, starts its own stack, writes per-worktree env files (`src/voca/.env`, `frontend/.env.local`, `.worktree.env` with the worktree's frontend/backend ports).
+- `uv run task worktree:remove -- <short-name>` — stops its stack, removes the dir; leftover stack data: `supabase stack list` + `supabase stack destroy --stack-id <id> --yes`.
+- Inside a worktree run the same tasks (`uv run task dev`, `test`, `check`, `test:e2e`) — dev-server ports (frontend 11xxx, backend 11xxx by default; overridable via `.worktree.env`) and Supabase URL/keys resolve per worktree.
+- `uv run task env:sync` regenerates a checkout's env files from its stack (run after first-ever stack-mode start, or when keys change).
+- `supabase stack list` shows every stack on the machine; stack-mode identity = worktree path + git branch.
+- Legacy stacks started before stack mode keep running until stopped with `SUPABASE_EXPERIMENTAL_STACK=0 supabase stop`.

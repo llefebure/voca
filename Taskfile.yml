@@ -1,8 +1,17 @@
 version: '3'
 
+# Per-worktree dev-server ports, optional: written by scripts/worktree_env.py
+# inside each agent worktree (stack mode); absent in the main checkout, where
+# the defaults apply. Missing dotenv files are fine (verified: task ignores).
+dotenv: ['.worktree.env']
+
+vars:
+  FRONTEND_PORT: '{{.FRONTEND_PORT | default "3000"}}'
+  BACKEND_PORT: '{{.BACKEND_PORT | default "8000"}}'
+
 tasks:
   supabase-start:
-    desc: Start the local Supabase stack
+    desc: 'Start the local Supabase stack (stack mode: per worktree/branch project)'
     cmds:
       - supabase start
 
@@ -14,12 +23,12 @@ tasks:
   stop-backend:
     desc: Stop the backend server
     cmds:
-      - lsof -ti:8000 | xargs kill -9 || echo "Backend not running"
+      - lsof -ti:{{.BACKEND_PORT}} | xargs kill -9 || echo "Backend not running"
 
   stop-frontend:
     desc: Stop the frontend server
     cmds:
-      - lsof -ti:3000 | xargs kill -9 || echo "Frontend not running"
+      - lsof -ti:{{.FRONTEND_PORT}} | xargs kill -9 || echo "Frontend not running"
 
   stop-all:
     desc: Stop all services (Supabase, Backend, Frontend)
@@ -39,15 +48,57 @@ tasks:
       - task supabase-start
       - task supabase-migrate
 
+  stack:list:
+    desc: 'List all local Supabase stacks (one per worktree/branch in stack mode)'
+    cmds:
+      - supabase stack list
+
+  env:sync:
+    desc: Regenerate src/voca/.env, frontend/.env.local, .worktree.env from this worktree's local stack
+    cmds:
+      - uv run python scripts/worktree_env.py sync
+
+  worktree:new:
+    desc: 'Create an isolated agent worktree. Usage: uv run task worktree:new -- feature/<short-name> [base-ref]'
+    cmds:
+      - |
+        set -e
+        BRANCH="{{index (splitList " " (trim .CLI_ARGS)) 0 | trim}}"
+        BASE="{{index (splitList " " (trim .CLI_ARGS)) 1 | trim}}"
+        NAME="{{(splitList "/" (index (splitList " " (trim .CLI_ARGS)) 0)) | last}}"
+        test -n "$NAME" || { echo "usage: uv run task worktree:new -- <branch-name> [base-ref]"; exit 1; }
+        BASE="${BASE:-main}"
+        test ! -e ".worktrees/$NAME" || { echo ".worktrees/$NAME already exists"; exit 1; }
+        git worktree add ".worktrees/$NAME" -b "$BRANCH" "$BASE"
+        cd ".worktrees/$NAME"
+        uv sync
+        (cd frontend && npm install)
+        # Starts this worktree's own Supabase stack (stack-mode identity is
+        # worktree path + branch) and writes its env files + ports.
+        uv run python scripts/worktree_env.py sync
+        echo "==> Worktree ready: cd .worktrees/$NAME && uv run task dev"
+
+  worktree:remove:
+    desc: 'Stop the worktree stack and remove the dir. Usage: uv run task worktree:remove -- <short-name>'
+    cmds:
+      - |
+        set -e
+        NAME="{{.CLI_ARGS | trim}}"
+        test -n "$NAME" || { echo "usage: uv run task worktree:remove -- <short-name>"; exit 1; }
+        test -d ".worktrees/$NAME" || { echo ".worktrees/$NAME does not exist"; exit 1; }
+        (cd ".worktrees/$NAME" && supabase stop) || echo "stack already stopped or missing"
+        git worktree remove ".worktrees/$NAME" || git worktree remove --force ".worktrees/$NAME"
+        echo "==> Removed. Leftover stack data: 'supabase stack list' then 'supabase stack destroy --stack-id <id> --yes'"
+
   frontend:
     desc: Start frontend development server
     cmds:
-      - cd frontend && npm run dev
+      - cd frontend && npm run dev -- -p {{.FRONTEND_PORT}}
 
   backend:
     desc: Start backend development server
     cmds:
-      - uv run uvicorn voca.main:app --host 0.0.0.0 --port 8000 --reload
+      - uv run uvicorn voca.main:app --host 0.0.0.0 --port {{.BACKEND_PORT}} --reload
 
   all:
     desc: Start both frontend and backend servers together
@@ -119,6 +170,9 @@ tasks:
     # from src/voca/.env via this dotenv, so invoking `npx playwright test`
     # directly is NOT supported (it has no seeding env).
     dotenv: ['src/voca/.env']
+    env:
+      # Per-worktree dev server (E2E_BASE_URL read by playwright.config.ts).
+      E2E_BASE_URL: 'http://localhost:{{.FRONTEND_PORT}}'
     cmds:
       - cd frontend && npx playwright test {{.CLI_ARGS}}
 
@@ -134,4 +188,4 @@ tasks:
     cmds:
       - task test
       - task: lint
-      - task: check:frontend
+      - task check:frontend
