@@ -4,6 +4,24 @@ import * as React from 'react'
 
 const MUTED_STORAGE_KEY = 'voca-tts-muted'
 
+// The muted preference lives in localStorage, an external store. Toggling in
+// this tab notifies local listeners (no `storage` event fires in the writing
+// document); cross-tab changes come through the `storage` event.
+const mutedListeners = new Set<() => void>()
+
+function subscribeMuted(callback: () => void) {
+  mutedListeners.add(callback)
+  window.addEventListener('storage', callback)
+  return () => {
+    mutedListeners.delete(callback)
+    window.removeEventListener('storage', callback)
+  }
+}
+
+function readMutedSnapshot(): boolean {
+  return window.localStorage.getItem(MUTED_STORAGE_KEY) === '1'
+}
+
 /**
  * Speech playback for tutor messages: auto-speaks each finished reply (unless
  * muted), can replay a specific message, and stops whatever is playing.
@@ -11,10 +29,12 @@ const MUTED_STORAGE_KEY = 'voca-tts-muted'
  * the target language selects the model/voice (see lib/languages.ts).
  */
 export function useSpeech() {
-  const [muted, setMuted] = React.useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return window.localStorage.getItem(MUTED_STORAGE_KEY) === '1'
-  })
+  // Read localStorage through useSyncExternalStore so no server/client branch
+  // taints the hydrated HTML: React hydrates with the server snapshot
+  // (unmuted) and re-renders with the persisted value afterwards — a localStorage
+  // read in a state initializer would instead render a different icon client-
+  // side on the first pass (hydration mismatch on the mute button).
+  const muted = React.useSyncExternalStore(subscribeMuted, readMutedSnapshot, () => false)
   const [speakingId, setSpeakingId] = React.useState<string | null>(null)
   const audioRef = React.useRef<HTMLAudioElement | null>(null)
   const urlRef = React.useRef<string | null>(null)
@@ -58,12 +78,10 @@ export function useSpeech() {
   )
 
   const toggleMuted = React.useCallback(() => {
-    setMuted((previous) => {
-      const next = !previous
-      window.localStorage.setItem(MUTED_STORAGE_KEY, next ? '1' : '0')
-      if (next) stop()
-      return next
-    })
+    const next = !readMutedSnapshot()
+    window.localStorage.setItem(MUTED_STORAGE_KEY, next ? '1' : '0')
+    if (next) stop()
+    for (const listener of mutedListeners) listener()
   }, [stop])
 
   React.useEffect(() => stop, [stop])
