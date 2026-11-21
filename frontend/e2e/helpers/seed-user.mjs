@@ -16,12 +16,17 @@ export const TEST_EMAIL = 'e2e-test@voca.local'
 export const TEST_PASSWORD = 'voca-e2e-password-1'
 
 function readRepoEnvFile() {
-  try {
-    const here = dirname(fileURLToPath(import.meta.url)) // frontend/e2e/
-    return readFileSync(resolve(here, '..', '..', 'src', 'voca', '.env'), 'utf8')
-  } catch {
-    return ''
+  // Walk upward from this file (frontend/e2e/helpers/) until we find the
+  // untracked src/voca/.env — handles the helper sitting any level deep.
+  let dir = dirname(fileURLToPath(import.meta.url))
+  for (let depth = 0; depth < 5; depth++) {
+    try {
+      return readFileSync(resolve(dir, 'src', 'voca', '.env'), 'utf8')
+    } catch {
+      dir = resolve(dir, '..')
+    }
   }
+  return ''
 }
 
 function envValue(name) {
