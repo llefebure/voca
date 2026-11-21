@@ -159,7 +159,7 @@ function ChatView({
   continueSessionId: string | null
 }) {
   const router = useRouter()
-  const { muted, toggleMuted, speakingId, speak, stop } = useSpeech()
+  const { muted, toggleMuted, speakingId, speak, stop, speakStream, finishStream } = useSpeech()
   const [input, setInput] = React.useState('')
   const [submitting, setSubmitting] = React.useState(false)
   const [ending, setEnding] = React.useState(false)
@@ -168,7 +168,6 @@ function ChatView({
   const [plan, setPlan] = React.useState<VocaSessionPlan | null>(null)
   const [planning, setPlanning] = React.useState(false)
   const sessionIdRef = React.useRef<string | null>(null)
-  const lastSpokenRef = React.useRef<string | null>(null)
   // Synchronous guard for Enter-key double submits: state alone can lag one render.
   const submittingRef = React.useRef(false)
 
@@ -296,8 +295,8 @@ function ChatView({
           parts: [{ type: 'text' as const, text: line.text }],
         }))
         setMessages(restored)
-        const last = restored[restored.length - 1]
-        lastSpokenRef.current = last?.id ?? null // do not re-speak restored history
+        // No stream was ever started for these ids, so the hook's speakStream/
+        // finishStream are no-ops for restored history: it is never re-spoken.
         // Clean the URL so reloads start fresh instead of re-entering this flow.
         window.history.replaceState(null, '', '/')
       } catch (error) {
@@ -342,20 +341,24 @@ function ChatView({
     }
   }
 
-  // Speak each tutor reply once it has finished streaming.
+  // Speak the tutor's reply sentence-by-sentence while it streams: every message
+  // update feeds the grown text to the per-message queue (idempotent per grown
+  // text), and the trailing fragment is flushed when streaming ends. A muted or
+  // stopped stream is dead for this message — unmuting applies from the next
+  // message — and restored history (no stream ever started) is never re-spoken.
   React.useEffect(() => {
-    if (muted || status !== 'ready') return
     const last = messages[messages.length - 1]
     if (!last || last.role !== 'assistant') return
-    if (lastSpokenRef.current === last.id) return
     const text = last.parts
       .filter((part) => part.type === 'text')
       .map((part) => part.text)
       .join('')
-    if (!text.trim()) return
-    lastSpokenRef.current = last.id
-    void speak(last.id, text, targetLanguage)
-  }, [messages, muted, speak, status, targetLanguage])
+    if (streaming && text.trim()) {
+      speakStream(last.id, text, targetLanguage)
+    } else if (status === 'ready') {
+      finishStream(last.id)
+    }
+  }, [messages, streaming, status, targetLanguage, speakStream, finishStream])
 
   function handleTranslate(text: string) {
     void (async () => {
@@ -382,7 +385,6 @@ function ChatView({
   function startNewSession() {
     stop()
     sessionIdRef.current = null
-    lastSpokenRef.current = null
     setPlan(null)
     setMessages([])
   }
@@ -398,7 +400,6 @@ function ChatView({
       // redirect only lands when the analyst finishes, and navigating away
       // before that must never resurrect the conversation (or its dialog).
       sessionIdRef.current = null
-      lastSpokenRef.current = null
       setSessionId(null)
       setPlan(null)
       setMessages([])
