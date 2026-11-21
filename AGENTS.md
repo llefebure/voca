@@ -17,7 +17,9 @@ uv run task backend      # backend only          uv run task frontend   # fronte
 uv run task test         # pytest, offline/deterministic (mocked supabase, pydantic-ai TestModel). Always green without Ollama/Supabase.
 uv run task test:all     # also runs live-LLM integration tests (marker `integration`; needs Ollama up)
 uv run task tidy         # ruff lint --fix + format (backend)
-(cd frontend && npm run typecheck && npm run lint)   # frontend gate, also `uv run task check:frontend`
+uv run task check:frontend  # frontend gate: typecheck + lint + unit tests (Vitest, offline, supabase mocked)
+uv run task test:e2e     # Playwright browser smoke — NOT part of the gate; needs `uv run task dev` up. CANONICAL (and only supported) invocation: don't run `npx playwright test` directly — extra args pass through, e.g. `uv run task test:e2e -- -g progress` or `-- --ui`
+uv run task check        # every automated gate: test + lint + check:frontend
 ```
 
 Env: `src/voca/.env` (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `LLM_BASE_URL`, `LLM_PLANNING_MODEL`) and `frontend/.env.local` (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`). Ollama must be running at `http://localhost:11434` and signed in for cloud models.
@@ -37,6 +39,10 @@ frontend/
   components/ui/     # shadcn base-nova primitives (Base UI); chat primitives: message, bubble, message-scroller
   lib/               # languages.ts (language map + TTS per language), api.ts, supabase.ts, use-speech.ts
 supabase/migrations/ # schema; tests/  # pytest suite (offline by default)
+frontend/tests/      # Vitest + RTL suite (offline: supabase + backend fetch mocked in
+                     # tests/helpers/); pages-smoke.test.tsx smoke-renders every route;
+                     # frontend/e2e/ # Playwright browser smoke (auth.setup.mjs seeds the test user,
+                     # smoke.spec.mjs visits each route and fails on uncaught page errors)
 ```
 
 ## Conventions
@@ -44,6 +50,7 @@ supabase/migrations/ # schema; tests/  # pytest suite (offline by default)
 - Backend imports are package-absolute (`from voca.services.srs import …`); serve with `uv run uvicorn voca.main:app`.
 - `/chat` is SSE: each event is a single-line JSON `{type: "delta"|"error"|"done", …}` on `data:`.
 - Frontend talks to the backend through `lib/api.ts` constants (language names + TTS config in `lib/languages.ts`); auth = Supabase JWT in `Authorization: Bearer`.
-- After backend or frontend changes: run `uv run task test`, `uv run ruff check .`, and the frontend typecheck/lint — **fix breakage before claiming done**.
+- After backend or frontend changes: run `uv run task test`, `uv run ruff check .`, and `uv run task check:frontend` — **fix breakage before claiming done**. Frontend pages have jsdom smoke tests precisely because typecheck/eslint miss runtime UI breakage (provider misuse, hydration/undefined-data crashes); when adding a page or component, extend `frontend/tests/` (see `tests/helpers/supabase-mock.ts` for the canned-data pattern).
+- When touching something only the real browser catches (hydration, real Supabase wiring), also run the browser smoke via `uv run task test:e2e` with `uv run task dev` up — always through the task, never bare `npx playwright test` (the task is what exports the seeder's env). The E2E suite self-seeds its test user (`e2e-test@voca.local`) into local Supabase.
 - Plan documents live in `plans/` (e.g. `plans/<short-name>.md`), never at the repo root — one file per plan, same filename across revisions.
 - Do the work on a dedicated feature branch cut from `main` (e.g. `feature/<short-name>`, or `fix/<short-name>` for bug fixes); do not commit directly to `main`.

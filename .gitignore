@@ -92,3 +92,9 @@ supabase/.env
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Frontend test tooling (Playwright artifacts, any level)
+frontend/e2e/.auth/
+frontend/e2e/.results/
+test-results/
+playwright-report/
