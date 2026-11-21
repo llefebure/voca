@@ -9,17 +9,21 @@ import { vi } from 'vitest'
 export const navigationState = { pushes: [] as string[] }
 
 export function createNavigationMock(pathname = '/test') {
-  return {
-    useRouter: () => ({
-      push: vi.fn((href: string) => {
-        navigationState.pushes.push(href)
-      }),
-      replace: vi.fn(),
-      back: vi.fn(),
-      forward: vi.fn(),
-      refresh: vi.fn(),
-      prefetch: vi.fn(),
+  // One router object per mock: real useRouter returns a stable instance, and
+  // a fresh object per render would make `router` a churning effect dep on the
+  // data-loading pages (unbounded refetch loops in tests with paged loads).
+  const router = {
+    push: vi.fn((href: string) => {
+      navigationState.pushes.push(href)
     }),
+    replace: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    refresh: vi.fn(),
+    prefetch: vi.fn(),
+  }
+  return {
+    useRouter: () => router,
     usePathname: () => pathname,
     useSearchParams: () => new URLSearchParams(),
     useParams: () => ({}),

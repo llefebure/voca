@@ -175,6 +175,7 @@ class SessionResponse(BaseModel):
 
 class SessionListResponse(BaseModel):
     sessions: list[SessionResponse]
+    total: int = 0
 
 
 class ChatRequest(BaseModel):
@@ -239,12 +240,18 @@ async def ollama_health():
 
 
 @app.get("/sessions", response_model=SessionListResponse)
-async def list_sessions(user=Depends(get_current_user), language: str | None = None):
-    query = supabase.table("sessions").select("*").eq("user_id", user.id)
+async def list_sessions(
+    user=Depends(get_current_user), language: str | None = None, limit: int = 50, offset: int = 0
+):
+    """Paged session list, newest first; `total` is the full count behind the page."""
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    query = supabase.table("sessions").select("*", count="exact").eq("user_id", user.id)
     if language:
         query = query.eq("language", language)
-    res = await db(query.order("created_at", desc=True))
+    res = await db(query.order("created_at", desc=True).range(offset, offset + limit - 1))
     return SessionListResponse(
+        total=res.count or 0,
         sessions=[
             SessionResponse(
                 session_id=session["id"],

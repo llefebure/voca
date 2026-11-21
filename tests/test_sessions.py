@@ -105,6 +105,46 @@ async def test_list_sessions(client, fake_supabase):
 
 
 @pytest.mark.asyncio
+async def test_list_sessions_paginates_limit_offset_and_total(client, fake_supabase):
+    """limit/offset slice the list; total carries the full row count, not the page."""
+    fake_supabase.results[("sessions", "select")] = [
+        {"id": f"sess-{i:03d}", "status": "completed", "language": "es"} for i in range(105)
+    ]
+    response = await client.get(
+        "/sessions", params={"limit": 10, "offset": 100}, headers=AUTH
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert [s["session_id"] for s in body["sessions"]] == [f"sess-{i:03d}" for i in range(100, 105)]
+    assert body["total"] == 105
+    assert fake_supabase.select_ranges_rows("sessions")[-1] == (100, 109)
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_defaults_and_cap(client, fake_supabase):
+    """No params → default page (50); limit is capped at 100, offset floors at 0."""
+    fake_supabase.results[("sessions", "select")] = [
+        {"id": f"sess-{i:03d}", "status": "completed", "language": "es"} for i in range(105)
+    ]
+    response = await client.get("/sessions", headers=AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["sessions"]) == 50
+    assert body["total"] == 105
+    assert fake_supabase.select_ranges_rows("sessions")[-1] == (0, 49)
+
+    # Cap: an oversized limit behaves like 100.
+    response = await client.get("/sessions", params={"limit": 500}, headers=AUTH)
+    assert response.status_code == 200
+    assert fake_supabase.select_ranges_rows("sessions")[-1] == (0, 99)
+
+    # A negative offset floors to the first page.
+    response = await client.get("/sessions", params={"offset": -50}, headers=AUTH)
+    assert response.status_code == 200
+    assert fake_supabase.select_ranges_rows("sessions")[-1] == (0, 49)
+
+
+@pytest.mark.asyncio
 async def test_list_sessions_filters_by_language(client, fake_supabase):
     fake_supabase.results[("sessions", "select")] = [
         {"id": "sess-1", "status": "active", "language": "es"}
