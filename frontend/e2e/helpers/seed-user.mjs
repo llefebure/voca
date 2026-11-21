@@ -1,49 +1,30 @@
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
 /**
  * Seeds the E2E test user into the local Supabase stack: creates (or confirms)
  * the auth user and ensures `profiles` / `user_languages` rows exist, so the
  * signed-in smoke tests render a populated dashboard. Runs before the browser
  * (auth.setup.mjs), using the service-role key.
  *
- * Keys are read from the environment, else parsed out of the untracked
- * `src/voca/.env` — nothing secret is committed.
+ * The seeder's keys are supplied by the `test:e2e` task (its dotenv loads the
+ * untracked `src/voca/.env`; nothing secret is committed). That task is the
+ * canonical — and only — supported way to run this suite; invoking `npx
+ * playwright test` directly has no such env and fails fast below.
  */
 
 export const TEST_EMAIL = 'e2e-test@voca.local'
 export const TEST_PASSWORD = 'voca-e2e-password-1'
 
-function readRepoEnvFile() {
-  // Walk upward from this file (frontend/e2e/helpers/) until we find the
-  // untracked src/voca/.env — handles the helper sitting any level deep.
-  let dir = dirname(fileURLToPath(import.meta.url))
-  for (let depth = 0; depth < 5; depth++) {
-    try {
-      return readFileSync(resolve(dir, 'src', 'voca', '.env'), 'utf8')
-    } catch {
-      dir = resolve(dir, '..')
-    }
-  }
-  return ''
-}
-
-function envValue(name) {
-  if (process.env[name]) return process.env[name]
-  const match = readRepoEnvFile().match(new RegExp(`^${name}=(.*)$`, 'm'))
-  return match ? match[1].trim() : undefined
-}
-
 function loadConfig() {
-  const url = process.env.SUPABASE_URL ?? envValue('SUPABASE_URL') ?? 'http://127.0.0.1:54321'
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? envValue('SUPABASE_SERVICE_ROLE_KEY')
+  // Supplied by the test:e2e task's dotenv (src/voca/.env). Direct
+  // `npx playwright test` invocations have no seeding env — run the suite
+  // with `uv run task test:e2e` instead.
+  const url = (process.env.SUPABASE_URL ?? 'http://127.0.0.1:54321').replace(/\/$/, '')
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
   if (!serviceKey) {
     throw new Error(
-      'E2E seeding needs SUPABASE_SERVICE_ROLE_KEY (set it or let Playwright read src/voca/.env). Is the Supabase stack up (`uv run task dev`)?',
+      'E2E seeding has no SUPABASE_SERVICE_ROLE_KEY. Run the suite via its canonical path: `uv run task test:e2e` (the task exports the keys from src/voca/.env). Also check the stack is up: `uv run task dev`.',
     )
   }
-  return { url: url.replace(/\/$/, ''), serviceKey }
+  return { url, serviceKey }
 }
 
 export async function ensureUser() {

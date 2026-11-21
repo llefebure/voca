@@ -115,12 +115,12 @@ tasks:
 
   test:e2e:
     desc: Playwright browser smoke tests (needs `uv run task dev` running in another shell)
-    # Keys for the seeder (task-level, so nothing else sees them). If the env
-    # file is absent the seed helper still walks up to src/voca/.env itself,
-    # and direct `npx playwright test` runs work without the task either way.
+    # The canonical way to run the browser tests — env for the seeder comes
+    # from src/voca/.env via this dotenv, so invoking `npx playwright test`
+    # directly is NOT supported (it has no seeding env).
     dotenv: ['src/voca/.env']
     cmds:
-      - cd frontend && npx playwright test
+      - cd frontend && npx playwright test {{.CLI_ARGS}}
 
   check:frontend:
     desc: Typecheck + lint + unit tests for the frontend

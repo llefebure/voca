@@ -25,8 +25,10 @@ Build **both** layers:
 2. **Playwright browser smoke** — `frontend/e2e/smoke.spec.mjs` visits every
    route signed in and fails on any uncaught page error or real console error.
    Separate `uv run task test:e2e`; needs `uv run task dev` up. Self-seeds its
-   test user (`e2e-test@voca.local`) into local Supabase via the service-role
-   key read from `src/voca/.env` (nothing secret committed).
+   test user (`e2e-test@voca.local`) into local Supabase; the seeder's keys
+   are exported by the task itself (task-level dotenv from the untracked
+   `src/voca/.env` — nothing secret committed). Single canonical invocation:
+   direct `npx playwright test` runs have no env and fail fast by design.
 
 Skipped on purpose: vendored `components/ui/*` shadcn primitives (CLI-managed).
 
@@ -52,3 +54,7 @@ Skipped on purpose: vendored `components/ui/*` shadcn primitives (CLI-managed).
   frontend unit tests (offline, ~3s)**.
 - `uv run task test:e2e` with the dev stack — 8/8 browser smoke (seed, sign-in,
   7 routes × no-crash/no-uncaught-errors) in ~7s.
+- Follow-up (per the person): single canonical path — `test:e2e` passes
+  `{{.CLI_ARGS}}` through to Playwright (`-- -g progress`, `-- --ui`), the
+  seeder's file-walking fallback was removed (keys come from the task's
+  dotenv only), and all docs point at the task as the only invocation.

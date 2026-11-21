@@ -4,7 +4,9 @@ import { defineConfig } from '@playwright/test'
  * Browser smoke suite. Requires the dev stack (`uv run task dev`) — supabase,
  * backend FastAPI on :8000, and the Next.js dev server on :3000. No webServer
  * directive: the stack is already the developer's environment.
- * Run with `uv run task test:e2e` (or `npx playwright test` in frontend/).
+ * Run it exclusively with `uv run task test:e2e` — the canonical path that
+ * also exports the seeder's env (task-level dotenv, src/voca/.env); direct
+ * `npx playwright test` runs are not supported.
  */
 export default defineConfig({
   testDir: './e2e',
