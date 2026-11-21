@@ -108,14 +108,25 @@ tasks:
     cmds:
       - cd frontend && npm run lint
 
+  test:frontend:
+    desc: Frontend unit/component tests (Vitest + RTL, offline, supabase mocked)
+    cmds:
+      - cd frontend && npm run test
+
+  test:e2e:
+    desc: Playwright browser smoke tests (needs `uv run task dev` running in another shell)
+    cmds:
+      - cd frontend && npx playwright test
+
   check:frontend:
-    desc: Typecheck + lint the frontend
+    desc: Typecheck + lint + unit tests for the frontend
     cmds:
       - task: typecheck
       - task: lint:frontend
+      - task: test:frontend
 
   check:
-    desc: Every automated gate (offline backend tests + ruff + frontend typecheck/lint)
+    desc: Every automated gate (offline backend tests + ruff + frontend typecheck/lint/tests)
     cmds:
       - task test
       - task: lint
