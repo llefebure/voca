@@ -1,8 +1,10 @@
 /**
- * Seeds the E2E test user into the local Supabase stack: creates (or confirms)
- * the auth user and ensures `profiles` / `user_languages` rows exist, so the
- * signed-in smoke tests render a populated dashboard. Runs before the browser
- * (auth.setup.mjs), using the service-role key.
+ * Seeds the dev/E2E test user into the local Supabase stack: creates the auth
+ * user, re-asserts its known password and confirmed email, and ensures
+ * `profiles` / `user_languages` rows exist, so the login always works and the
+ * signed-in smoke tests render a populated dashboard. Used by the E2E setup
+ * (auth.setup.mjs) and by `uv run task dev` via scripts/ensure-dev-user.mjs,
+ * using the service-role key.
  *
  * The seeder's keys are supplied by the `test:e2e` task (its dotenv loads the
  * untracked `src/voca/.env`; nothing secret is committed). That task is the
@@ -54,6 +56,15 @@ export async function ensureUser() {
     throw new Error(`Could not seed the E2E user: ${created.status} ${await created.text()}`)
   }
   if (!userId) throw new Error(`Seeded user ${TEST_EMAIL} not found after create attempt`)
+
+  // Re-assert the known password and confirmed email, so the login always
+  // works — even when the account pre-existed with different credentials.
+  const updated = await fetch(`${url}/auth/v1/admin/users/${userId}`, {
+    method: 'PUT',
+    headers: serviceHeaders,
+    body: JSON.stringify({ password: TEST_PASSWORD, email_confirm: true }),
+  })
+  if (!updated.ok) throw new Error(`Could not re-assert the seeded user's password: ${updated.status} ${await updated.text()}`)
 
   // profiles row (target-language pointer) — upsert so re-seeds are harmless.
   const profile = await fetch(`${url}/rest/v1/profiles`, {
