@@ -17,7 +17,9 @@ export default defineConfig({
   reporter: [['list']],
   outputDir: 'e2e/.results',
   use: {
-    baseURL: 'http://localhost:3000',
+    // Dev server port is per worktree (stack mode): E2E_BASE_URL is passed
+    // by `uv run task test:e2e`; defaults to the main checkout's :3000.
+    baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
     trace: 'retain-on-failure',
   },
   projects: [

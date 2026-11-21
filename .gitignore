@@ -87,12 +87,17 @@ build/
 # Ignore local Supabase env files
 supabase/.env
 
+# Parallel agent worktrees + their per-worktree ports (stack mode)
+.worktree.env
+.worktrees/
+
 # Logs
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# Frontend test tooling (Playwright artifacts, any level)
 # Frontend test tooling (Playwright artifacts, any level)
 frontend/e2e/.auth/
 frontend/e2e/.results/
