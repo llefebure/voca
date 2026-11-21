@@ -106,10 +106,19 @@ tasks:
       - frontend
       - backend
 
+  ensure-dev-user:
+    desc: Ensure the always-working test login exists in the local Supabase stack
+    # Same dotenv mechanism as test:e2e: the seeder reads SUPABASE_URL +
+    # SUPABASE_SERVICE_ROLE_KEY (per-worktree values included in stack mode).
+    dotenv: ['src/voca/.env']
+    cmds:
+      - node scripts/ensure-dev-user.mjs
+
   dev:
     desc: Start everything (Supabase, Backend, Frontend) with one command
     cmds:
       - task supabase-ready
+      - task ensure-dev-user
       - task all
 
   lint:
