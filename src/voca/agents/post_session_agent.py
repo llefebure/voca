@@ -6,6 +6,31 @@ from pydantic_ai import Agent, RunContext
 from voca.services.languages import language_name
 from voca.services.llm import planning_model
 
+# NEW CARDS harvest rules: cards are born from need, not from completeness. Kept as a
+# module constant so tests can assert the rules stay prompt-visible.
+NEW_CARDS_RULES = (
+    "Identify 0-5 new cards. An empty list is a good result when the learner used "
+    "everything correctly and asked nothing — do not fill the list for its own sake. "
+    "Propose a card only when at least one criterion holds:\n"
+    "   (a) UNCERTAINTY — the learner asked what something means or how to say it "
+    '("¿cómo se dice…?", "how do you say X", "what does X mean"), hesitated, '
+    "restarted a sentence, or repeatedly self-corrected.\n"
+    "   (b) INCORRECT USE — the tutor corrected the learner's word, form, or pattern "
+    "(wrong word, gender, tense, agreement); the tutor's reformulation in the transcript "
+    "is the signal.\n"
+    "   (c) BETTER ALTERNATIVE — the learner's phrasing was understandable but awkward or "
+    "unidiomatic, the tutor offered a more natural expression, or a phrase from the "
+    "session plan would have been stronger than what the learner improvised.\n"
+    "   Hard exclusions — never make a card for: words the learner used correctly and "
+    "confidently; items the tutor merely used that the learner never engaged with "
+    "(unless (c) applies); grammar the learner already produced correctly; anything "
+    "whose front or back matches an EXISTING CARD.\n"
+    "   Every card must quote the transcript line it came from in `source_sentence`; "
+    "its `reason` must name the criterion that fired (a, b, or c) and quote the exact "
+    "signal (the question, hesitation, or tutor reformulation). If the same item "
+    "appears in several turns, create ONE card, not several.\n"
+)
+
 
 # Response structure for the post-session agent
 class CardCandidate(BaseModel):
@@ -50,6 +75,8 @@ class PostSessionDeps(TypedDict):
     transcript: list[dict]
     # Compact card rows: {"id", "front", "back"} — no FSRS state or other columns.
     due_cards: NotRequired[list[dict]]
+    # Recent card front/back pairs (no FSRS state): new cards must not duplicate them.
+    existing_cards: NotRequired[list[dict]]
     target_language: NotRequired[str | None]
     session_plan: NotRequired[dict | None]
 
@@ -63,14 +90,14 @@ post_session_agent = Agent(
     instructions=(
         "You are a language learning analyst. Your job is to review a conversation transcript "
         "between a language tutor and a learner and extract valuable learning material.\n\n"
-        "1. NEW CARDS: Identify 5-8 new cards. Prioritize items the learner struggled with, "
-        "explicitly asked about, or which are critical for their level. "
-        "Use the provided selection rules.\n"
-        "2. GRADES: Grade every due card by ID as attempted or not_attempted, based on the "
+        "1. NEW CARDS: "
+        + NEW_CARDS_RULES
+        + "2. GRADES: Grade every due card by ID as attempted or not_attempted, based on the "
         "transcript (recognition_pass when the learner understood it without producing it).\n"
         "3. RECAP: Create an encouraging and concise recap of the session, informed by the "
         "session plan (its objectives and lesson) — do not invent metrics like minutes "
-        "spoken.\n"
+        "spoken. Return the recap as the structured object the schema defines (positives, "
+        "key_corrections, next_time_preview), never as a plain string.\n"
         "4. PROFILE: Suggest updates to the user's profile based on evidence in the transcript "
         "(e.g., newly mentioned interests, improved fluency). Leave fields you have no "
         "evidence for unset."
@@ -86,6 +113,9 @@ def inject_post_session_deps(ctx: RunContext[PostSessionDeps]) -> str:
         f"- [{c.get('id')}] {c.get('front', '')}: {c.get('back', '')}"
         for c in ctx.deps.get("due_cards", [])
     )
+    existing_cards_text = "\n".join(
+        f"- {c.get('front', '')}: {c.get('back', '')}" for c in ctx.deps.get("existing_cards", [])
+    )
     plan = ctx.deps.get("session_plan") or {}
     lesson = plan.get("lesson") or {}
     plan_text = (
@@ -96,5 +126,7 @@ def inject_post_session_deps(ctx: RunContext[PostSessionDeps]) -> str:
         f"TARGET LANGUAGE: {language}\n\n"
         f"SESSION TRANSCRIPT:\n{transcript_text}\n\n"
         f"DUE CARDS TO EVALUATE (grade by ID):\n{due_cards_text}\n\n"
+        f"EXISTING CARDS (the learner already has these — never create a card whose front "
+        f"or back matches any of them):\n{existing_cards_text}\n\n"
         f"SESSION PLAN: {plan_text}"
     )
