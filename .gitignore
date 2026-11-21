@@ -93,8 +93,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Frontend test tooling
+# Frontend test tooling (Playwright artifacts, any level)
 frontend/e2e/.auth/
 frontend/e2e/.results/
-frontend/test-results/
-frontend/playwright-report/
+test-results/
+playwright-report/
