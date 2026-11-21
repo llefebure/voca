@@ -613,6 +613,27 @@ function ChatView({
             rows={1}
           />
           <InputGroupAddon align="block-end" className="justify-end">
+            {/* Ending is the step people miss: a red stop trigger right next to
+                the send button, only while a session is open and the tutor is
+                quiet (never during submit/stream). */}
+            {sessionId && !streaming && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <InputGroupButton
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setConfirmEnd(true)}
+                      disabled={submitting}
+                      aria-label="End session & recap"
+                    >
+                      <SquareIcon className="text-destructive" />
+                    </InputGroupButton>
+                  }
+                />
+                <TooltipContent>End session &amp; recap</TooltipContent>
+              </Tooltip>
+            )}
             <InputGroupButton
               variant="default"
               onClick={() => handleSubmit()}
@@ -622,21 +643,6 @@ function ChatView({
             </InputGroupButton>
           </InputGroupAddon>
         </InputGroup>
-
-        {/* Ending is the step people miss: a slim full-width bar under the box,
-            impossible to miss while a session is open. */}
-        {sessionId && !streaming && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-2 w-full rounded-[10px] border-destructive/30 bg-destructive/5 text-destructive hover:bg-destructive/10 hover:text-destructive"
-            onClick={() => setConfirmEnd(true)}
-            disabled={submitting}
-          >
-            <FlagIcon data-icon="inline-start" />
-            End session &amp; recap
-          </Button>
-        )}
       </form>
 
       <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>
