@@ -17,15 +17,14 @@ import {
 
 import { supabase } from '@/lib/supabase'
 import { BACKEND_URL } from '@/lib/api'
-import {
-  DEFAULT_LANGUAGE,
-  languageName,
-  lessonTemplateName,
-} from '@/lib/languages'
+import { DEFAULT_LANGUAGE, languageName } from '@/lib/languages'
+import type { ChatDataTypes, LessonInstance } from '@/lib/lesson-events'
 import { useLanguage } from '@/components/language-context'
 import { useSpeech } from '@/lib/use-speech'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { Markdown } from '@/components/markdown'
+import { lessonTemplateName } from '@/lib/lesson-templates'
+import { LessonMaterial, LessonSummaryCard, ProposalCard } from '@/components/lesson/lesson-components'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -74,17 +73,8 @@ const TUTOR_AVATAR = (
   </Avatar>
 )
 
-/** The enriched session plan as stored by POST /sessions/plan. */
-type VocaSessionPlan = {
-  lesson?: {
-    template?: string
-    topic?: string
-    scenario?: string | null
-    objectives?: string[]
-  }
-  opening_hook?: string
-  cards?: { id: string; front: string; back: string }[]
-}
+/** The chat page's message type: text + typed lesson data parts. */
+export type VocaUIMessage = UIMessage<unknown, ChatDataTypes>
 
 export default function ChatPage() {
   // The `?session=` continue param is unwrapped inside <Suspense> so the route
@@ -165,12 +155,23 @@ function ChatView({
   const [ending, setEnding] = React.useState(false)
   const [confirmEnd, setConfirmEnd] = React.useState(false)
   const [sessionId, setSessionId] = React.useState<string | null>(null)
-  const [plan, setPlan] = React.useState<VocaSessionPlan | null>(null)
-  const [planning, setPlanning] = React.useState(false)
+  const [acceptingLessonId, setAcceptingLessonId] = React.useState<string | null>(null)
   const sessionIdRef = React.useRef<string | null>(null)
   const lastSpokenRef = React.useRef<string | null>(null)
   // Synchronous guard for Enter-key double submits: state alone can lag one render.
   const submittingRef = React.useRef(false)
+
+  function dataPartMessage(
+    id: string,
+    kind: 'proposal_ready' | 'lesson_started' | 'lesson_completed' | 'lesson_declined',
+    data: unknown,
+  ): VocaUIMessage {
+    return {
+      id,
+      role: 'assistant',
+      parts: [{ type: `data-${kind}`, id: `${kind}-${id}`, data } as VocaUIMessage['parts'][number]],
+    }
+  }
 
   const transport = React.useMemo(
     () =>
@@ -188,7 +189,7 @@ function ChatView({
           }
           const options = (body ?? {}) as { sessionId?: string }
           return {
-            body: { messages, sessionId: options.sessionId },
+            body: { messages: messages as VocaUIMessage[], sessionId: options.sessionId },
             headers: { Authorization: `Bearer ${session.access_token}` },
           }
         },
@@ -196,7 +197,7 @@ function ChatView({
     [],
   )
 
-  const { messages, sendMessage, status, setMessages } = useChat({
+  const { messages, sendMessage, status, setMessages } = useChat<VocaUIMessage>({
     transport,
     onError: (error) => {
       toast({ title: 'Chat error', description: error.message, type: 'error' })
@@ -205,35 +206,36 @@ function ChatView({
 
   const streaming = status === 'streaming' || status === 'submitted'
 
-  /** Generate the session's lesson plan; best-effort, surfaced in the header. */
-  async function planSession(id: string) {
-    setPlanning(true)
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      const response = await fetch(`${BACKEND_URL}/sessions/plan`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session?.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ session_id: id }),
-      })
-      if (!response.ok) throw new Error(String(response.status))
-      setPlan((await response.json()) as VocaSessionPlan)
-    } catch {
-      // Planning is best-effort; the tutor still works without a plan.
-      setPlan(null)
-      toast({
-        title: 'Planning unavailable',
-        description: 'Could not plan this session — starting without a lesson plan.',
-        type: 'error',
-      })
-    } finally {
-      setPlanning(false)
+  // The lesson state lives in the message list: the last event of each kind wins.
+  // Works identically for live streams and restored transcript replays.
+  const { activeLesson, pendingProposal } = React.useMemo(() => {
+    let active: LessonInstance | null = null
+    let pending: LessonInstance | null = null
+    let lastSummary: LessonInstance | null = null
+    for (const message of messages) {
+      for (const part of message.parts) {
+        if (part.type === 'data-proposal_ready') {
+          pending = part.data.lesson
+        } else if (part.type === 'data-lesson_started') {
+          active = part.data.lesson
+          pending = null
+        } else if (part.type === 'data-lesson_completed') {
+          active = null
+          lastSummary = part.data.lesson
+        } else if (part.type === 'data-lesson_declined') {
+          if (pending?.id === part.data.lesson_id) pending = null
+        }
+      }
     }
-  }
+    return { activeLesson: active, pendingProposal: pending, lastSummary }
+  }, [messages])
+
+  // The lesson banner in the header derives straight from that state.
+  const phaseLine = pendingProposal
+    ? 'Lesson proposed — check the card'
+    : activeLesson
+      ? `Lesson: ${activeLesson.spec.title}`
+      : 'Practice speaking with your conversation partner.'
 
   /** Reuse or lazily create the session the conversation belongs to. Event-time only. */
   async function activeSessionId(): Promise<string> {
@@ -253,15 +255,13 @@ function ChatView({
     const data = (await response.json()) as { session_id: string }
     sessionIdRef.current = data.session_id
     setSessionId(data.session_id)
-    // Plan the lesson right after the session starts so the tutor greets with it.
-    await planSession(data.session_id)
     return data.session_id
   }
 
   // Continue an open session (History's Continue button links /?session=<id>): the
   // ONLY restore path — nothing auto-resumes on load or toggle. Verifies ownership
-  // and open status under RLS, restores the stored plan, and replays the transcript
-  // so the conversation (and its proxy-sent history) continues seamlessly.
+  // and open status under RLS, and replays the transcript (including lesson event
+  // rows) so the conversation and its lesson state continue seamlessly.
   React.useEffect(() => {
     if (!continueSessionId) return
     let cancelled = false
@@ -269,7 +269,7 @@ function ChatView({
       try {
         const { data: sessionRow } = await supabase
           .from('sessions')
-          .select('id, status, plan')
+          .select('id, status, lessons')
           .eq('id', continueSessionId)
           .maybeSingle()
         if (cancelled) return
@@ -283,18 +283,37 @@ function ChatView({
         }
         const { data: transcript } = await supabase
           .from('transcripts')
-          .select('speaker, text')
+          .select('speaker, text, payload')
           .eq('session_id', sessionRow.id)
           .order('created_at')
+
         if (cancelled) return
+        // Lesson state replays from the persisted payload rows (below) — the
+        // derived-state effect walks the messages, as it does for live streams.
         sessionIdRef.current = sessionRow.id
         setSessionId(sessionRow.id)
-        setPlan((sessionRow.plan as VocaSessionPlan | null) ?? null)
-        const restored: UIMessage[] = (transcript ?? []).map((line, index) => ({
-          id: `restored-${index}`,
-          role: line.speaker === 'user' ? ('user' as const) : ('assistant' as const),
-          parts: [{ type: 'text' as const, text: line.text }],
-        }))
+        const restored: VocaUIMessage[] = []
+        for (const [index, line] of (transcript ?? []).entries()) {
+          const payload = (line as { payload?: { kind?: string; data?: unknown } }).payload
+          if (payload?.kind) {
+            const data = payload.data
+            if (payload.kind === 'lesson_declined') {
+              restored.push(dataPartMessage(`restored-declined-${index}`, 'lesson_declined', data))
+            } else if (
+              payload.kind === 'proposal_ready' ||
+              payload.kind === 'lesson_started' ||
+              payload.kind === 'lesson_completed'
+            ) {
+              restored.push(dataPartMessage(`restored-${payload.kind}-${index}`, payload.kind, data))
+            }
+            continue
+          }
+          restored.push({
+            id: `restored-${index}`,
+            role: line.speaker === 'user' ? ('user' as const) : ('assistant' as const),
+            parts: [{ type: 'text' as const, text: line.text }],
+          })
+        }
         setMessages(restored)
         const last = restored[restored.length - 1]
         lastSpokenRef.current = last?.id ?? null // do not re-speak restored history
@@ -317,10 +336,10 @@ function ChatView({
 
   async function handleSubmit(event?: React.FormEvent) {
     event?.preventDefault()
-    // The first message awaits /sessions/start (+ lesson planning) before the
-    // transport flips `status` out of `ready` and the input clears, so `status`
-    // alone lets a second quick Enter double-submit (and could start a duplicate
-    // session). Flip the guard synchronously before that window opens.
+    // The first message awaits /sessions/start before the transport flips `status`
+    // out of `ready` and the input clears, so `status` alone lets a second quick
+    // Enter double-submit (and could start a duplicate session). Flip the guard
+    // synchronously before that window opens.
     if (submittingRef.current) return
     const text = input.trim()
     if (!text || status !== 'ready') return
@@ -339,6 +358,126 @@ function ChatView({
     } finally {
       submittingRef.current = false
       setSubmitting(false)
+    }
+  }
+
+  /** Accept the pending proposal: POST accept and stream the opener into the chat. */
+  async function acceptLesson() {
+    const lesson = pendingProposal
+    if (!lesson || !sessionIdRef.current || acceptingLessonId) return
+    setAcceptingLessonId(lesson.id)
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        throw new Error('Your session has expired. Please sign in again.')
+      }
+      const response = await fetch(`${BACKEND_URL}/sessions/lessons/accept`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ session_id: sessionIdRef.current }),
+      })
+      if (!response.ok || !response.body) throw new Error('Failed to start the lesson')
+
+      const openerId = crypto.randomUUID()
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      const upsertOpener = (kind: 'ensure' | 'text', text = '') => {
+        setMessages((prev) => {
+          const last = prev[prev.length - 1]
+          if (last?.id === openerId) {
+            const textPart =
+              last.parts.find((part) => part.type === 'text') ?? ({ type: 'text', text: '' } as const)
+            return [
+              ...prev.slice(0, -1),
+              {
+                ...last,
+                parts: [
+                  ...last.parts.filter((part) => part.type !== 'text'),
+                  { type: 'text' as const, text: (textPart as { text: string }).text + text },
+                ],
+              },
+            ]
+          }
+          const initial: VocaUIMessage = {
+            id: openerId,
+            role: 'assistant',
+            parts: [
+              {
+                type: 'data-lesson_started',
+                id: `data-${openerId}`,
+                data: { lesson },
+              } as VocaUIMessage['parts'][number],
+              { type: 'text' as const, text: text },
+            ],
+          }
+          return [...prev, initial]
+        })
+      }
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let boundary = buffer.indexOf('\n\n')
+        while (boundary !== -1) {
+          const frame = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          boundary = buffer.indexOf('\n\n')
+          const line = frame.split('\n').find((l) => l.startsWith('data:'))
+          if (!line) continue
+          try {
+            const event = JSON.parse(line.slice('data:'.length))
+            if (event.type === 'event' && event.kind === 'lesson_started') {
+              upsertOpener('ensure')
+            } else if (event.type === 'delta' && typeof event.text === 'string') {
+              upsertOpener('text', event.text)
+            }
+            // `status`/`error`/`done` frames: ignore (accept errors toast on !ok).
+          } catch {
+            // Non-JSON SSE frame.
+          }
+        }
+      }
+    } catch (error) {
+      toast({
+        title: 'Could not start the lesson',
+        description: error instanceof Error ? error.message : 'Failed to start the lesson',
+        type: 'error',
+      })
+    } finally {
+      setAcceptingLessonId(null)
+    }
+  }
+
+  async function declineLesson() {
+    const lesson = pendingProposal
+    if (!lesson || !sessionIdRef.current) return
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession()
+      const response = await fetch(`${BACKEND_URL}/sessions/lessons/decline`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session?.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ session_id: sessionIdRef.current }),
+      })
+      if (!response.ok) throw new Error('Failed to decline')
+    } catch (error) {
+      toast({
+        title: 'Error',
+        description: error instanceof Error ? error.message : 'Failed to decline',
+        type: 'error',
+      })
     }
   }
 
@@ -383,7 +522,6 @@ function ChatView({
     stop()
     sessionIdRef.current = null
     lastSpokenRef.current = null
-    setPlan(null)
     setMessages([])
   }
 
@@ -400,7 +538,6 @@ function ChatView({
       sessionIdRef.current = null
       lastSpokenRef.current = null
       setSessionId(null)
-      setPlan(null)
       setMessages([])
       setInput('')
       const {
@@ -440,14 +577,16 @@ function ChatView({
     <div className="relative flex h-full w-full flex-col">
       <div className="flex items-start justify-between gap-4 px-8 pt-6 pb-4">
         <div className="flex flex-col gap-1">
-          <div className="font-medium">{languageName(targetLanguage)} Session</div>
-          <div className="text-sm text-muted-foreground">
-            {planning
-              ? 'Planning your session…'
-              : plan?.lesson
-                ? `Today's lesson: ${lessonTemplateName(plan.lesson.template)} — ${plan.lesson.topic}`
-                : 'Practice speaking with your conversation partner.'}
+          <div className="font-medium">
+            {languageName(targetLanguage)} Session
+            {activeLesson ? (
+              <span className="text-muted-foreground">
+                {' '}
+                · {lessonTemplateName(activeLesson.spec.template)}
+              </span>
+            ) : null}
           </div>
+          <div className="text-sm text-muted-foreground">{phaseLine}</div>
         </div>
         <div className="flex items-center gap-1">
           <Tooltip>
@@ -482,7 +621,8 @@ function ChatView({
               </EmptyMedia>
               <EmptyTitle>Ready to practice?</EmptyTitle>
               <EmptyDescription>
-                Start a conversation in {languageName(targetLanguage)} to improve your fluency.
+                Start a conversation in {languageName(targetLanguage)} — chat casually, and Voca
+                will offer a structured lesson when the time feels right.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
@@ -494,10 +634,6 @@ function ChatView({
                 <MessageScrollerContent className="gap-6 py-4">
                   {messages.map((message) => {
                     const isUser = message.role === 'user'
-                    const text = message.parts
-                      .filter((part) => part.type === 'text')
-                      .map((part) => part.text)
-                      .join('')
                     return (
                       <MessageScrollerItem
                         key={message.id}
@@ -510,69 +646,111 @@ function ChatView({
                           )}
                           <MessageContent>
                             {!isUser && <MessageHeader>Voca</MessageHeader>}
-                            <Bubble
-                              variant={isUser ? 'default' : 'muted'}
-                              align={isUser ? 'end' : 'start'}
-                            >
-                              <BubbleContent>
-                                {isUser ? text : <Markdown>{text}</Markdown>}
-                              </BubbleContent>
-                            </Bubble>
-                            {!isUser && text.trim() && (
-                              <div className="flex w-full items-center gap-1 px-1 opacity-40 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100">
-                                <Tooltip>
-                                  <TooltipTrigger
-                                    render={
-                                      <Button
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        onClick={() => handleTranslate(text)}
+                            <div className="flex flex-col items-start gap-2">
+                              {message.parts.map((part, partIndex) => {
+                                if (part.type === 'text') {
+                                  const text = part.text
+                                  if (isUser && !text.trim()) return null
+                                  return (
+                                    <React.Fragment key={`text-${partIndex}`}>
+                                      <Bubble
+                                        variant={isUser ? 'default' : 'muted'}
+                                        align={isUser ? 'end' : 'start'}
                                       >
-                                        <LanguagesIcon />
-                                      </Button>
-                                    }
-                                  />
-                                  <TooltipContent>Translate</TooltipContent>
-                                </Tooltip>
-                                {speakingId === message.id ? (
-                                  <Tooltip>
-                                    <TooltipTrigger
-                                      render={
-                                        <Button
-                                          variant="ghost"
-                                          size="icon-xs"
-                                          onClick={stop}
-                                        >
-                                          <SquareIcon />
-                                        </Button>
-                                      }
+                                        <BubbleContent>
+                                          {isUser ? text : <Markdown>{text}</Markdown>}
+                                        </BubbleContent>
+                                      </Bubble>
+                                      {!isUser && text.trim() && (
+                                        <div className="flex w-full items-center gap-1 px-1 opacity-40 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100">
+                                          <Tooltip>
+                                            <TooltipTrigger
+                                              render={
+                                                <Button
+                                                  variant="ghost"
+                                                  size="icon-xs"
+                                                  onClick={() => handleTranslate(text)}
+                                                >
+                                                  <LanguagesIcon />
+                                                </Button>
+                                              }
+                                            />
+                                            <TooltipContent>Translate</TooltipContent>
+                                          </Tooltip>
+                                          {speakingId === message.id ? (
+                                            <Tooltip>
+                                              <TooltipTrigger
+                                                render={
+                                                  <Button
+                                                    variant="ghost"
+                                                    size="icon-xs"
+                                                    onClick={stop}
+                                                  >
+                                                    <SquareIcon />
+                                                  </Button>
+                                                }
+                                              />
+                                              <TooltipContent>Stop speaking</TooltipContent>
+                                            </Tooltip>
+                                          ) : (
+                                            <Tooltip>
+                                              <TooltipTrigger
+                                                render={
+                                                  <Button
+                                                    variant="ghost"
+                                                    size="icon-xs"
+                                                    onClick={() =>
+                                                      void speak(message.id, text, targetLanguage)
+                                                    }
+                                                  >
+                                                    <Volume2Icon />
+                                                  </Button>
+                                                }
+                                              />
+                                              <TooltipContent>Replay speech</TooltipContent>
+                                            </Tooltip>
+                                          )}
+                                        </div>
+                                      )}
+                                    </React.Fragment>
+                                  )
+                                }
+                                if (part.type === 'data-proposal_ready') {
+                                  const lesson = part.data.lesson
+                                  if (lesson.id !== pendingProposal?.id) return null
+                                  return (
+                                    <ProposalCard
+                                      key={`proposal-${lesson.id}`}
+                                      lesson={lesson}
+                                      onAccept={acceptLesson}
+                                      onDecline={declineLesson}
+                                      busy={acceptingLessonId === lesson.id}
                                     />
-                                    <TooltipContent>Stop speaking</TooltipContent>
-                                  </Tooltip>
-                                ) : (
-                                  <Tooltip>
-                                    <TooltipTrigger
-                                      render={
-                                        <Button
-                                          variant="ghost"
-                                          size="icon-xs"
-                                          onClick={() => void speak(message.id, text, targetLanguage)}
-                                        >
-                                          <Volume2Icon />
-                                        </Button>
-                                      }
+                                  )
+                                }
+                                if (part.type === 'data-lesson_started') {
+                                  const lesson = part.data.lesson
+                                  if (lesson.id !== activeLesson?.id) return null
+                                  return <LessonMaterial key={`lesson-${lesson.id}`} lesson={lesson} />
+                                }
+                                if (part.type === 'data-lesson_completed') {
+                                  return (
+                                    <LessonSummaryCard
+                                      key={`summary-${part.data.lesson.id}`}
+                                      lesson={part.data.lesson}
                                     />
-                                    <TooltipContent>Replay speech</TooltipContent>
-                                  </Tooltip>
-                                )}
-                              </div>
-                            )}
+                                  )
+                                }
+                                // `data-status` parts render via streamingStatusChip.
+                                return null
+                              })}
+                            </div>
                           </MessageContent>
                         </Message>
                       </MessageScrollerItem>
                     )
                   })}
-                  {status === 'submitted' && (
+                  {streamingStatusChip(messages, streaming) !== null && (
                     <MessageScrollerItem messageId="thinking">
                       <Message align="start">
                         <MessageAvatar>{TUTOR_AVATAR}</MessageAvatar>
@@ -580,7 +758,9 @@ function ChatView({
                           <MessageHeader>Voca</MessageHeader>
                           <Bubble variant="muted" align="start">
                             <BubbleContent>
-                              <span className="shimmer">Thinking…</span>
+                              <span className="shimmer">
+                                {streamingStatusChip(messages, streaming)}
+                              </span>
                             </BubbleContent>
                           </Bubble>
                         </MessageContent>
@@ -667,4 +847,15 @@ function ChatView({
       </Dialog>
     </div>
   )
+}
+
+/** Transient status chip: the latest data-status of the streaming message, pre-text. */
+function streamingStatusChip(messages: VocaUIMessage[], streaming: boolean): string | null {
+  if (!streaming) return null
+  const last = messages[messages.length - 1]
+  if (!last || last.role === 'user') return null
+  if (last.parts.some((part) => part.type === 'text' && part.text.trim())) return null
+  const status = [...last.parts].reverse().find((part) => part.type === 'data-status')
+  if (status && status.type === 'data-status') return status.data.text
+  return 'Thinking…'
 }

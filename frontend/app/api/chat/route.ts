@@ -1,19 +1,42 @@
-import { createUIMessageStream, createUIMessageStreamResponse, type UIMessage } from 'ai'
+import {
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+  type UIMessageStreamWriter,
+} from 'ai'
 
 import { BACKEND_URL } from '@/lib/api'
+import type { ChatDataTypes } from '@/lib/lesson-events'
+import type { UIMessage } from 'ai'
 
 /**
  * Proxy between the browser's AI SDK chat and the FastAPI backend.
  *
  * - Forwards the Supabase bearer token from the incoming request.
  * - Maps UIMessages into the `{role, content}` history the backend expects.
- * - Transcodes the backend's JSON SSE frames (`{type: delta|error|done}`) into the
- *   AI SDK UI message stream protocol so `useChat` can consume them.
+ * - Transcodes the backend's JSON SSE frames into the AI SDK UI message stream
+ *   protocol so `useChat` can consume them:
+ *   `{type: "delta"}` → text parts; `{type: "status"}` → transient `data-status`
+ *   parts; `{type: "event", kind, data}` → typed `data-<kind>` parts (proposal
+ *   cards, lesson material, summaries) the chat page renders as lesson UI.
  */
 
-type VocaUIMessage = UIMessage<Record<string, never>>
+type VocaUIMessage = UIMessage<unknown, ChatDataTypes>
 
 const TEXT_PART_ID = 'text'
+
+/** Structured event kinds the proxy forwards as data parts (same names as the backend). */
+const EVENT_KINDS = [
+  'proposal_ready',
+  'lesson_started',
+  'lesson_completed',
+  'lesson_declined',
+] as const
+
+type LessonEventKind = (typeof EVENT_KINDS)[number]
+
+function isLessonEventKind(kind: unknown): kind is LessonEventKind {
+  return EVENT_KINDS.includes(kind as LessonEventKind)
+}
 
 function textOf(message: UIMessage): string {
   return message.parts
@@ -50,6 +73,30 @@ async function* sseEvents(body: ReadableStream<Uint8Array>) {
   }
 }
 
+/** Writes a structured event as its typed data part (runtime-checked kind). */
+function writeEventData(
+  writer: UIMessageStreamWriter<VocaUIMessage>,
+  kind: LessonEventKind,
+  data: unknown,
+  seq: () => string,
+) {
+  const id = `${kind}-${seq()}`
+  switch (kind) {
+    case 'proposal_ready':
+      writer.write({ type: 'data-proposal_ready', id, data: data as ChatDataTypes['proposal_ready'] })
+      break
+    case 'lesson_started':
+      writer.write({ type: 'data-lesson_started', id, data: data as ChatDataTypes['lesson_started'] })
+      break
+    case 'lesson_completed':
+      writer.write({ type: 'data-lesson_completed', id, data: data as ChatDataTypes['lesson_completed'] })
+      break
+    case 'lesson_declined':
+      writer.write({ type: 'data-lesson_declined', id, data: data as ChatDataTypes['lesson_declined'] })
+      break
+  }
+}
+
 export async function POST(request: Request) {
   const auth = request.headers.get('authorization')
   if (!auth) {
@@ -72,6 +119,7 @@ export async function POST(request: Request) {
 
   const messageId = crypto.randomUUID()
   let openedText = false
+  let dataPartSeq = 0
 
   const stream = createUIMessageStream({
     // Providing the incoming messages puts the stream into persistence mode and
@@ -120,6 +168,17 @@ export async function POST(request: Request) {
         for await (const event of sseEvents(upstream.body)) {
           if (event.type === 'delta' && typeof event.text === 'string') {
             writer.write({ type: 'text-delta', id: TEXT_PART_ID, delta: event.text })
+          } else if (event.type === 'status') {
+            // Transient chip ("Designing your lesson…"); rides as a data part and
+            // stops rendering once the streamed reply gets its first text.
+            writer.write({
+              type: 'data-status',
+              id: `status-${dataPartSeq++}`,
+              data: { text: String(event.text ?? '') },
+            })
+          } else if (event.type === 'event' && isLessonEventKind(event.kind)) {
+            // Proposal cards / lesson material / summaries ride as typed data parts.
+            writeEventData(writer, event.kind, event.data, () => String(dataPartSeq++))
           } else if (event.type === 'error') {
             writer.write({ type: 'error', errorText: String(event.message ?? 'Tutor error') })
           } else if (event.type === 'done') {

@@ -32,14 +32,3 @@ const TTS_BY_LANGUAGE: Record<LanguageCode, TtsConfig> = {
 export function ttsFor(code?: string | null): TtsConfig {
   return (code !== null && TTS_BY_LANGUAGE[code as LanguageCode]) || TTS_BY_LANGUAGE.es
 }
-
-/** Lesson template ids from the planner, for display purposes. */
-export const LESSON_TEMPLATE_NAMES: Record<string, string> = {
-  role_play: 'Role Play',
-  reading_comprehension: 'Reading Comprehension',
-  free_conversation: 'Free Conversation',
-}
-
-export function lessonTemplateName(templateId?: string | null): string {
-  return (templateId && LESSON_TEMPLATE_NAMES[templateId]) || 'Conversation practice'
-}

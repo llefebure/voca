@@ -47,7 +47,6 @@ PORTS_ENV_PATH = Path(".worktree.env")
 LLM_ENV_DEFAULTS: dict[str, str] = {
     "LLM_BASE_URL": "http://localhost:11434/v1",
     "LLM_MODEL": "gemma4:31b-cloud",
-    "LLM_PLANNING_MODEL": "gemma4:31b-cloud",
 }
 # Keys kept from an existing src/voca/.env across syncs.
 PRESERVE_PREFIXES = ("LLM_",)
@@ -101,7 +100,7 @@ def is_git_worktree() -> bool:
         common_dir = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"], capture_output=True, text=True, timeout=30
         ).stdout.strip()
-    except (FileNotFoundError, subprocess.SubprocessError):
+    except FileNotFoundError, subprocess.SubprocessError:
         return False
     if not git_dir or not common_dir:
         return False
@@ -122,7 +121,9 @@ def pick_ports(name: str, existing: dict[str, str]) -> tuple[int, int]:
     for offset in range(0, PORT_BAND_SIZE - 2, 2):
         if port_free(frontend + offset) and port_free(backend + offset):
             return frontend + offset, backend + offset
-    raise SystemExit(f"No free port pair found in [{PORT_BAND_START}, {PORT_BAND_START + PORT_BAND_SIZE})")
+    raise SystemExit(
+        f"No free port pair found in [{PORT_BAND_START}, {PORT_BAND_START + PORT_BAND_SIZE})"
+    )
 
 
 def ensure_supabase_stack() -> dict:
@@ -163,12 +164,16 @@ def write_env_files(frontend_port: int, backend_port: int, stack_env: dict[str, 
         anon_key = stack_env["ANON_KEY"]
         service_key = stack_env["SERVICE_ROLE_KEY"]
     except KeyError as exc:
-        raise SystemExit(f"Stack env map is missing {exc}; keys present: {sorted(stack_env)}") from exc
+        raise SystemExit(
+            f"Stack env map is missing {exc}; keys present: {sorted(stack_env)}"
+        ) from exc
 
     front_urls = f"http://localhost:{frontend_port},http://127.0.0.1:{frontend_port}"
 
     preserved = {
-        k: v for k, v in read_kv(ENV_PATH).items() if any(k.startswith(p) for p in PRESERVE_PREFIXES)
+        k: v
+        for k, v in read_kv(ENV_PATH).items()
+        if any(k.startswith(p) for p in PRESERVE_PREFIXES)
     }
     backend_env: list[tuple[str, str]] = [
         ("SUPABASE_URL", api_url),
@@ -176,15 +181,8 @@ def write_env_files(frontend_port: int, backend_port: int, stack_env: dict[str, 
         ("FRONTEND_PORT", str(frontend_port)),
         ("BACKEND_PORT", str(backend_port)),
         ("VOCA_FRONTEND_URLS", front_urls),
-        *(
-            (k, preserved.get(k, default))
-            for k, default in LLM_ENV_DEFAULTS.items()
-        ),
-        *(
-            (k, v)
-            for k, v in preserved.items()
-            if k not in LLM_ENV_DEFAULTS
-        ),
+        *((k, preserved.get(k, default)) for k, default in LLM_ENV_DEFAULTS.items()),
+        *((k, v) for k, v in preserved.items() if k not in LLM_ENV_DEFAULTS),
     ]
     write_kv(ENV_PATH, backend_env)
 
@@ -208,7 +206,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", choices=["sync"], help="sync env files from the local stack")
     parser.add_argument("--frontend-port", type=int, default=None, help="override frontend port")
     parser.add_argument("--backend-port", type=int, default=None, help="override backend port")
-    parser.add_argument("--name", default=None, help="identity for hashed port selection (default: cwd name)")
+    parser.add_argument(
+        "--name", default=None, help="identity for hashed port selection (default: cwd name)"
+    )
     args = parser.parse_args(argv)
 
     name = args.name or Path.cwd().name
@@ -221,7 +221,9 @@ def main(argv: list[str] | None = None) -> int:
     stack_env = find_stack_env(ensure_supabase_stack())
     write_env_files(frontend_port, backend_port, stack_env)
     _say(f"==> wrote {ENV_PATH}, {FRONTEND_ENV_PATH}, {PORTS_ENV_PATH}")
-    _say(f"==> frontend :{frontend_port}, backend :{backend_port}, supabase {stack_env.get('API_URL', '?')}")
+    _say(
+        f"==> frontend :{frontend_port}, backend :{backend_port}, supabase {stack_env.get('API_URL', '?')}"
+    )
     return 0
 
 
