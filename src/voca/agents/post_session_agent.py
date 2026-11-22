@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
 
 from voca.services.languages import language_name
-from voca.services.llm import planning_model
+from voca.services.llm import voca_model
 
 # NEW CARDS harvest rules: cards are born from need, not from completeness. Kept as a
 # module constant so tests can assert the rules stay prompt-visible.
@@ -78,26 +78,32 @@ class PostSessionDeps(TypedDict):
     # Recent card front/back pairs (no FSRS state): new cards must not duplicate them.
     existing_cards: NotRequired[list[dict]]
     target_language: NotRequired[str | None]
-    session_plan: NotRequired[dict | None]
+    # This session's lesson instances (completed/declined): informs the recap; the
+    # analyst never re-grades lesson target cards (main.py filters them out already).
+    lessons: NotRequired[list[dict]]
 
 
 post_session_agent = Agent(
-    model=planning_model,
+    model=voca_model,
     deps_type=PostSessionDeps,
     output_type=PostSessionResult,
     # See the planner: extra output retries for the rare schema slip.
     retries=3,
     instructions=(
         "You are a language learning analyst. Your job is to review a conversation transcript "
-        "between a language tutor and a learner and extract valuable learning material.\n\n"
+        "between a language tutor and a learner and extract valuable learning material. "
+        "The session may have contained structured lessons (already graded elsewhere — never "
+        "grade their target cards) alongside casual small talk; grade anything the lessons "
+        "did not cover.\n\n"
         "1. NEW CARDS: "
         + NEW_CARDS_RULES
-        + "2. GRADES: Grade every due card by ID as attempted or not_attempted, based on the "
+        + "2. GRADES: Grade every DUE card by ID as attempted or not_attempted, based on the "
         "transcript (recognition_pass when the learner understood it without producing it).\n"
         "3. RECAP: Create an encouraging and concise recap of the session, informed by the "
-        "session plan (its objectives and lesson) — do not invent metrics like minutes "
-        "spoken. Return the recap as the structured object the schema defines (positives, "
-        "key_corrections, next_time_preview), never as a plain string.\n"
+        "session's lessons (their summaries show how each went) and the small talk around "
+        "them — do not invent metrics like minutes spoken. Return the recap as the structured "
+        "object the schema defines (positives, key_corrections, next_time_preview), never as "
+        "a plain string.\n"
         "4. PROFILE: Suggest updates to the user's profile based on evidence in the transcript "
         "(e.g., newly mentioned interests, improved fluency). Leave fields you have no "
         "evidence for unset."
@@ -116,17 +122,21 @@ def inject_post_session_deps(ctx: RunContext[PostSessionDeps]) -> str:
     existing_cards_text = "\n".join(
         f"- {c.get('front', '')}: {c.get('back', '')}" for c in ctx.deps.get("existing_cards", [])
     )
-    plan = ctx.deps.get("session_plan") or {}
-    lesson = plan.get("lesson") or {}
-    plan_text = (
-        f"template={lesson.get('template', 'n/a')}; topic={lesson.get('topic', 'n/a')}; "
-        f"objectives={' | '.join(lesson.get('objectives') or []) or 'n/a'}"
+    lessons = ctx.deps.get("lessons") or []
+    lessons_text = "\n".join(
+        f"- {lesson.get('status', '?')}: {(lesson.get('spec') or {}).get('title', '?')}"
+        + (
+            f" — summary: {(lesson.get('summary') or {}).get('headline', '')}"
+            if lesson.get("summary")
+            else ""
+        )
+        for lesson in lessons
     )
     return (
         f"TARGET LANGUAGE: {language}\n\n"
         f"SESSION TRANSCRIPT:\n{transcript_text}\n\n"
-        f"DUE CARDS TO EVALUATE (grade by ID):\n{due_cards_text}\n\n"
+        f"DUE CARDS TO EVALUATE (grade by ID; lesson-covered cards already excluded):\n{due_cards_text}\n\n"
         f"EXISTING CARDS (the learner already has these — never create a card whose front "
         f"or back matches any of them):\n{existing_cards_text}\n\n"
-        f"SESSION PLAN: {plan_text}"
+        f"THIS SESSION'S LESSONS:\n{lessons_text or '(none — pure small-talk session)'}"
     )

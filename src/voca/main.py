@@ -1,8 +1,12 @@
 """Voca FastAPI backend.
 
 Chat is streamed as Server-Sent Events with single-line JSON frames:
-`data: {"type":"delta","text":...}` until `{"type":"done"}` (or `{"type":"error"}`), so
-newlines inside deltas cannot corrupt the stream. Serve this app with
+`data: {"type":"delta","text":...}` for chat text, `{"type":"status","text":...}`
+for transient chips, `{"type":"event","kind":...,"data":...}` for structured UI
+events (proposal cards, lesson material, summaries), and `{"type":"done"}` (or
+`{"type":"error"}`), so newlines inside payloads cannot corrupt the stream. The
+session's conversation phase (small talk ⇄ lessons) is derived from
+`sessions.lessons` in `services/lesson_flow`. Serve this app with
 `uv run uvicorn voca.main:app` from the repository root.
 """
 
@@ -10,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -23,11 +28,14 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
+from voca.agents.lesson_grader_agent import GraderDeps, lesson_grader_agent
 from voca.agents.post_session_agent import CardCandidate, post_session_agent
-from voca.agents.session_planner_agent import session_planner_agent
+from voca.agents.session_planner_agent import PlannerDeps, session_planner_agent
 from voca.agents.tutor_agent import TutorDeps, tutor_agent
+from voca.services import lesson_flow
 from voca.services.languages import DEFAULT_LANGUAGE
-from voca.services.llm import LLM_BASE_URL, ollama_model
+from voca.services.lesson_templates import find_template, template_name
+from voca.services.llm import LLM_BASE_URL, voca_model
 from voca.services.srs import (
     VOCA_RATING_MAP,
     new_card_state,
@@ -141,6 +149,26 @@ def fetch_recent_cards(
     return res.data or []
 
 
+def fetch_transcript(session_id: str, since: str | None = None) -> list[dict[str, Any]]:
+    """A session's chat turns (plus payload-bearing event rows) oldest first.
+
+    `since` (an ISO timestamp) keeps only rows at/after it — the slice the lesson
+    grader sees. Chat turns stay `speaker`/`text`; system event rows keep their
+    `payload` so restore can replay them.
+    """
+    res = (
+        supabase.table("transcripts")
+        .select("speaker, text, payload, created_at")
+        .eq("session_id", session_id)
+        .order("created_at")
+        .execute()
+    )
+    rows = res.data or []
+    if since is not None:
+        rows = [row for row in rows if (row.get("created_at") or "") >= since]
+    return rows
+
+
 async def get_owned_session(session_id: str, user_id: str) -> dict[str, Any]:
     """A session row the user owns, raising 404 otherwise."""
     try:
@@ -161,14 +189,26 @@ async def get_owned_session(session_id: str, user_id: str) -> dict[str, Any]:
     return res.data
 
 
-def insert_transcript(session_id: str, speaker: str, text: str) -> None:
-    supabase.table("transcripts").insert(
-        {"session_id": session_id, "speaker": speaker, "text": text}
-    ).execute()
+def insert_transcript(
+    session_id: str, speaker: str, text: str, payload: dict[str, Any] | None = None
+) -> None:
+    row: dict[str, Any] = {"session_id": session_id, "speaker": speaker, "text": text}
+    if payload is not None:
+        row["payload"] = payload
+    supabase.table("transcripts").insert(row).execute()
+
+
+def session_lessons(session: dict[str, Any]) -> list[dict[str, Any]]:
+    """The session's lesson instances as stored in `sessions.lessons`."""
+    return session.get("lessons") or []
+
+
+async def persist_lessons(session_id: str, lessons: list[dict[str, Any]]) -> None:
+    await db(supabase.table("sessions").update({"lessons": lessons}).eq("id", session_id))
 
 
 def sse(event: dict[str, Any]) -> str:
-    """Format one SSE frame; JSON-encoding keeps newlines inside deltas safe."""
+    """Format one SSE frame; JSON-encoding keeps newlines inside payloads safe."""
     return f"data: {json.dumps(event)}\n\n"
 
 
@@ -206,6 +246,64 @@ def harvest_new_cards(
     return kept[:MAX_NEW_CARDS]
 
 
+# --- FSRS ------------------------------------------------------------------------------
+
+
+async def apply_fsrs_review(
+    card_id: str,
+    user_id: str,
+    session_id: str,
+    language: str | None,
+    outcome: str,
+    lesson_id: str | None = None,
+    when: str | None = None,
+) -> None:
+    """Record one card review: update FSRS state and append a `card_reviews` row."""
+    rating = VOCA_RATING_MAP.get(outcome)
+    if rating is None:  # not_attempted or an unknown outcome label
+        return
+    res = await db(
+        supabase.table("cards")
+        .select("fsrs_data")
+        .eq("id", card_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+    )
+    if not res.data:
+        return
+
+    now = when or datetime.now(UTC).isoformat()
+    current_state = res.data.get("fsrs_data") or new_card_state()
+    new_state, review_log = review_card_state(current_state, rating)
+    await db(
+        supabase.table("cards")
+        .update(
+            {
+                "fsrs_data": new_state,
+                "next_review": next_review(new_state).isoformat(),
+                "last_review": now,
+            }
+        )
+        .eq("id", card_id)
+    )
+    # Append the graded review to the log so progress metrics (positive recalls,
+    # review activity over time) exist; fsrs_data keeps no counts. `session_id`
+    # lets recaps show this session's per-card results; `lesson_id` marks grades
+    # the per-lesson grader produced.
+    await db(
+        supabase.table("card_reviews").insert(
+            {
+                "card_id": card_id,
+                "user_id": user_id,
+                "session_id": session_id,
+                "language": language,
+                "lesson_id": lesson_id,
+                **review_log,
+            }
+        )
+    )
+
+
 # --- Models ---------------------------------------------------------------------------
 
 
@@ -233,6 +331,10 @@ class SessionActionRequest(BaseModel):
     session_id: str
 
 
+class LessonActionRequest(SessionActionRequest):
+    reason: str | None = None
+
+
 class TranslationRequest(BaseModel):
     text: str
     source_lang: str = "es"
@@ -244,7 +346,7 @@ class TranslationResponse(BaseModel):
 
 
 translator_agent = Agent(
-    model=ollama_model,
+    model=voca_model,
     instructions="You are a professional translator. Return ONLY the translation, nothing else.",
 )
 
@@ -263,6 +365,288 @@ def pydantic_history(
         else:
             messages.append(ModelRequest(parts=[UserPromptPart(content=content)]))
     return messages
+
+
+# --- Lesson flow: proposal / activation / grading --------------------------------------
+
+
+def required_missing_blocks(template_id: str, present_types: list[str]) -> list[str]:
+    """Required block types of `template_id` that are not in `present_types`."""
+    template = find_template(template_id)
+    if template is None:
+        return []
+    return [block for block in template["required_blocks"] if block not in present_types]
+
+
+async def run_proposal(user_id: str, session_id: str, language: str, idea: str = "") -> dict | None:
+    """Design a lesson proposal grounded in this session's recent chat, persist it.
+
+    Returns the new lesson instance (the newest entry of `sessions.lessons`), or
+    None when the planner could not produce template-valid material.
+    """
+    profile = await asyncio.to_thread(fetch_effective_profile, user_id, language)
+    due_rows = await asyncio.to_thread(fetch_due_cards, user_id, language)
+    due_cards = compact_cards(due_rows)
+    transcript = await asyncio.to_thread(fetch_transcript, session_id)
+    recent_turns = [
+        {"speaker": row["speaker"], "text": row["text"]}
+        for row in transcript
+        if row.get("speaker") in ("user", "tutor") and (row.get("text") or "").strip()
+    ][-12:]
+    session_row = await get_owned_session(session_id, user_id)
+    stored_lessons = session_lessons(session_row)
+
+    deps: PlannerDeps = {
+        "user_id": user_id,
+        "user_profile": profile,
+        "due_cards": due_cards,
+        "recent_transcript": recent_turns,
+        "session_lessons": [
+            {"status": lesson.get("status"), "title": (lesson.get("spec") or {}).get("title")}
+            for lesson in stored_lessons
+        ],
+        **({"idea": idea} if idea else {}),
+    }
+
+    feedback = "Design this lesson proposal."
+    by_id = {card["id"]: card for card in due_cards}
+    for _attempt in range(2):
+        try:
+            result = await session_planner_agent.run(feedback, deps=deps)
+            proposal = result.output
+        except Exception:
+            logger.exception("lesson planner run failed")
+            return None
+        blocks, dropped = lesson_flow.validate_material(
+            proposal.lesson.template, [b.model_dump() for b in proposal.material]
+        )
+        missing = required_missing_blocks(proposal.lesson.template, [b.type for b in blocks])
+        target_cards = [by_id[cid] for cid in proposal.target_card_ids or [] if cid in by_id]
+        if not missing and blocks:
+            lesson = lesson_flow.new_lesson(
+                proposal.lesson,
+                [b.model_dump() for b in blocks],
+                compact_cards(target_cards),
+                proposal.reason,
+                proposal.intro_line,
+            )
+            if dropped:
+                logger.info(
+                    "planner produced %s disallowed block(s) for %s: %s",
+                    len(dropped),
+                    proposal.lesson.template,
+                    dropped,
+                )
+            stored_lessons.append(lesson)
+            await persist_lessons(session_id, stored_lessons)
+            return lesson
+        feedback = (
+            "Your previous proposal's material was invalid for this template. "
+            f"Missing required blocks: {missing or '(none)'}; include every required block "
+            "and only blocks the template allows."
+        )
+    logger.warning("planner could not produce valid material for template")
+    return None
+
+
+async def activate_proposal(user_id: str, session_id: str) -> dict | None:
+    """Activate the session's pending proposal in the DB; return the lesson."""
+    session_row = await get_owned_session(session_id, user_id)
+    lessons = session_lessons(session_row)
+    pending = lesson_flow.pending_proposal(lessons)
+    if pending is None or lesson_flow.active_lesson(lessons):
+        return None
+    lesson = lesson_flow.activate(pending)
+    await persist_lessons(session_id, lesson_flow.update_lessons(lessons, lesson["id"], lesson))
+    return lesson
+
+
+async def grade_and_complete(user_id: str, session_id: str, language: str | None) -> dict | None:
+    """Grade the active lesson and persist its completion; return the lesson row."""
+    session_row = await get_owned_session(session_id, user_id)
+    lessons = session_lessons(session_row)
+    lesson = lesson_flow.active_lesson(lessons)
+    if lesson is None:
+        return None
+
+    transcript = await asyncio.to_thread(fetch_transcript, session_id, lesson.get("accepted_at"))
+    try:
+        result = await lesson_grader_agent.run(
+            "Grade this lesson.",
+            deps=GraderDeps(language=language, lesson=lesson, transcript=transcript),
+        )
+        grades = result.output
+    except Exception:
+        logger.exception("lesson grader run failed")
+        return None
+
+    graded = [
+        {
+            "card_id": grade.card_id,
+            "outcome": grade.outcome,
+            "bonus_use": grade.bonus_use,
+            "evidence": grade.evidence,
+        }
+        for grade in grades.grades
+    ]
+    for grade in graded:
+        if grade["card_id"] not in {c["id"] for c in lesson.get("target_cards", [])}:
+            continue  # never grade a card the lesson did not target
+        await apply_fsrs_review(
+            grade["card_id"], user_id, session_id, language, grade["outcome"], lesson["id"]
+        )
+
+    summary = {**grades.summary.model_dump(), "bonus_uses": grades.bonus_uses}
+    completed = lesson_flow.complete(lesson, graded, summary)
+    await persist_lessons(session_id, lesson_flow.update_lessons(lessons, lesson["id"], completed))
+    return completed
+
+
+# --- Tutor deps + SSE pump --------------------------------------------------------------
+
+
+async def build_tutor_deps(
+    user_id: str,
+    session_id: str,
+    language: str | None,
+    lessons: list[dict[str, Any]],
+    profile: dict[str, Any],
+    history: list[dict[str, Any]] | None,
+) -> TutorDeps:
+    """Everything the tutor agent needs for one streamed reply, plus its tool plumbing."""
+    phase = lesson_flow.derive_phase(lessons)
+    events: asyncio.Queue = asyncio.Queue()
+
+    async def run_planner(idea: str = "") -> dict | None:
+        try:
+            return await run_proposal(user_id, session_id, language or DEFAULT_LANGUAGE, idea)
+        except Exception:
+            logger.exception("proposal creation failed")
+            return None
+
+    async def activate() -> dict | None:
+        try:
+            lesson = await activate_proposal(user_id, session_id)
+            if lesson is None:
+                return None
+            await asyncio.to_thread(
+                insert_transcript,
+                session_id,
+                "system",
+                "",
+                {"kind": "lesson_started", "data": {"lesson": lesson}},
+            )
+            return lesson
+        except Exception:
+            logger.exception("lesson activation failed")
+            return None
+
+    async def complete() -> dict | None:
+        try:
+            lesson = await grade_and_complete(user_id, session_id, language)
+            if lesson is None:
+                return None
+            await asyncio.to_thread(
+                insert_transcript,
+                session_id,
+                "system",
+                "",
+                {"kind": "lesson_completed", "data": {"lesson": lesson}},
+            )
+            return lesson
+        except Exception:
+            logger.exception("lesson completion failed")
+            return None
+
+    async def record_event(kind: str, data: dict[str, Any]) -> None:
+        try:
+            await asyncio.to_thread(
+                insert_transcript, session_id, "system", "", {"kind": kind, "data": data}
+            )
+        except Exception:
+            logger.exception("event persistence failed")
+
+    callbacks: dict[str, Callable]
+    callbacks = {
+        "run_planner": run_planner,
+        "activate_proposal": activate,
+        "grade_and_complete": complete,
+        "record_event": record_event,
+    }
+
+    smalltalk_turns = sum(1 for message in history or [] if message.get("role") == "user")
+    due_cards = []
+    if phase != lesson_flow.PHASE_LESSON:
+        try:
+            due_cards = compact_cards(await asyncio.to_thread(fetch_due_cards, user_id, language))
+        except Exception:
+            logger.exception("due-card fetch failed")
+
+    deps: TutorDeps = {
+        "user_id": user_id,
+        "session_id": session_id,
+        "user_profile": profile,
+        "phase": phase,
+        "active_lesson": lesson_flow.active_lesson(lessons),
+        "pending_proposal": lesson_flow.pending_proposal(lessons),
+        "session_lessons": lessons,
+        "due_cards": due_cards,
+        "smalltalk_turns": smalltalk_turns,
+        "events": events,
+        **callbacks,  # type: ignore[arg-type]
+    }
+    return deps
+
+
+async def tutor_frames(
+    prompt: str,
+    history: list[ModelRequest | ModelResponse],
+    deps: TutorDeps,
+    session_id: str,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream one tutor reply as SSE-ready frames, interleaved with tool events.
+
+    Text deltas and events produced by the tutor's tools share one queue, so the
+    tool events arrive in order with the surrounding text. The tutor's full text
+    is persisted as a transcript row even when the stream fails mid-way.
+    """
+    full_response = ""
+    queue = deps["events"]
+    producer: asyncio.Task | None = None
+    try:
+        async with tutor_agent.run_stream(prompt, message_history=history, deps=deps) as result:
+
+            async def consume():
+                nonlocal full_response
+                try:
+                    async for delta in result.stream_text(delta=True):
+                        full_response += delta
+                        await queue.put({"type": "delta", "text": delta})
+                finally:
+                    await queue.put(None)
+
+            producer = asyncio.ensure_future(consume())
+            while (event := await queue.get()) is not None:
+                yield event
+            await producer
+            producer = None
+    except Exception:
+        logger.exception("chat stream failed")
+        yield {"type": "error", "message": "The tutor hit an unexpected error. Please try again."}
+    finally:
+        if producer is not None:
+            producer.cancel()
+        if full_response:
+            await asyncio.to_thread(insert_transcript, session_id, "tutor", full_response)
+
+
+def sse_stream(frames: AsyncIterator[dict[str, Any]]) -> StreamingResponse:
+    async def stream():
+        async for frame in frames:
+            yield sse(frame)
+        yield sse({"type": "done"})
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 # --- Routes ---------------------------------------------------------------------------
@@ -307,7 +691,7 @@ async def list_sessions(
                 language=session.get("language"),
             )
             for session in (res.data or [])
-        ]
+        ],
     )
 
 
@@ -338,36 +722,76 @@ async def start_session(user=Depends(get_current_user)):
     )
 
 
-@app.post("/sessions/plan")
-async def plan_session(request: SessionActionRequest, user=Depends(get_current_user)):
+@app.post("/sessions/lessons/accept")
+async def accept_lesson(request: SessionActionRequest, user=Depends(get_current_user)):
+    """Activate the pending lesson proposal and stream the tutor's lesson opener."""
     session = await get_owned_session(request.session_id, user.id)
     if session["status"] != "active":
         raise HTTPException(status_code=409, detail="Session has already ended")
+    lessons = session_lessons(session)
+    if lesson_flow.derive_phase(lessons) != lesson_flow.PHASE_AWAITING_ACCEPT:
+        raise HTTPException(status_code=409, detail="No lesson proposal is waiting")
 
-    session_language = session.get("language")
-    profile, due_cards = await asyncio.gather(
-        asyncio.to_thread(fetch_effective_profile, user.id, session_language),
-        asyncio.to_thread(fetch_due_cards, user.id, session_language),
+    lesson = lesson_flow.activate(lesson_flow.pending_proposal(lessons))
+    stored = lesson_flow.update_lessons(lessons, lesson["id"], lesson)
+    await persist_lessons(session["id"], stored)
+    await asyncio.to_thread(
+        insert_transcript,
+        session["id"],
+        "system",
+        "",
+        {"kind": "lesson_started", "data": {"lesson": lesson}},
     )
 
-    result = await session_planner_agent.run(
-        "Plan the session.",
-        deps={
-            "user_id": user.id,
-            "user_profile": profile,
-            "due_cards": compact_cards(due_cards),
+    profile = await asyncio.to_thread(fetch_effective_profile, user.id, session.get("language"))
+    deps = await build_tutor_deps(
+        user.id, session["id"], session.get("language"), stored, profile, []
+    )
+
+    async def frames():
+        # The material + opener: the lesson event first, then the streamed reply.
+        yield {"type": "event", "kind": "lesson_started", "data": {"lesson": lesson}}
+        async for frame in tutor_frames(
+            "Open the lesson now with its opening line, then start the first step.",
+            [],
+            deps,
+            session["id"],
+        ):
+            yield frame
+
+    return sse_stream(frames())
+
+
+@app.post("/sessions/lessons/decline")
+async def decline_lesson(request: LessonActionRequest, user=Depends(get_current_user)):
+    """Mark the pending lesson proposal declined so the tutor stops referring to it."""
+    session = await get_owned_session(request.session_id, user.id)
+    if session["status"] != "active":
+        raise HTTPException(status_code=409, detail="Session has already ended")
+    lessons = session_lessons(session)
+    pending = lesson_flow.pending_proposal(lessons)
+    if pending is None:
+        raise HTTPException(status_code=409, detail="No lesson proposal is waiting")
+
+    declined = lesson_flow.decline(pending, request.reason)
+    await persist_lessons(
+        session["id"], lesson_flow.update_lessons(lessons, declined["id"], declined)
+    )
+    await asyncio.to_thread(
+        insert_transcript,
+        session["id"],
+        "system",
+        "",
+        {
+            "kind": "lesson_declined",
+            "data": {
+                "lesson_id": declined["id"],
+                "title": (declined.get("spec") or {}).get("title"),
+                "reason": request.reason,
+            },
         },
     )
-    plan = result.output
-
-    # Keep only selections that are actually due cards, and resolve their
-    # content into the stored plan so /chat never has to re-query cards.
-    by_id = {card["id"]: card for card in due_cards}
-    selected_cards = compact_cards([by_id[cid] for cid in plan.card_ids if cid in by_id])
-    plan_payload = {**plan.model_dump(), "cards": selected_cards}
-
-    await db(supabase.table("sessions").update({"plan": plan_payload}).eq("id", session["id"]))
-    return plan_payload
+    return {"status": "declined", "lesson_id": declined["id"]}
 
 
 @app.post("/sessions/end")
@@ -380,15 +804,18 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
 
     transcript = await db(
         supabase.table("transcripts")
-        .select("speaker, text")
+        .select("speaker, text, payload")
         .eq("session_id", session["id"])
         .order("created_at")
     )
     language = session.get("language")
-    due_cards, existing_cards = await asyncio.gather(
-        asyncio.to_thread(fetch_due_cards, user.id, language),
-        asyncio.to_thread(fetch_recent_cards, user.id, language),
-    )
+    lessons = session_lessons(session)
+    # Cards any lesson already graded are excluded — the analyst sweeps the rest
+    # (small-talk usage), so nothing is double-graded.
+    graded_ids = {grade["card_id"] for lesson in lessons for grade in lesson.get("grades") or []}
+    due_rows = await asyncio.to_thread(fetch_due_cards, user.id, language)
+    due_cards = compact_cards([row for row in due_rows if row.get("id") not in graded_ids])
+    existing_cards = await asyncio.to_thread(fetch_recent_cards, user.id, language)
 
     result = await post_session_agent.run(
         "Analyze the session and generate cards and recap.",
@@ -396,10 +823,10 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
             "user_id": user.id,
             "session_id": session["id"],
             "transcript": transcript.data or [],
-            "due_cards": compact_cards(due_cards),
+            "due_cards": due_cards,
             "existing_cards": existing_cards,
             "target_language": language,
-            "session_plan": session.get("plan"),
+            "lessons": lessons,
         },
     )
     analysis = result.output
@@ -434,48 +861,7 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
         )
 
     for review in analysis.reviewed_cards:
-        rating = VOCA_RATING_MAP.get(review.outcome)
-        if rating is None:  # not_attempted or an unknown outcome label
-            continue
-
-        res = await db(
-            supabase.table("cards")
-            .select("fsrs_data")
-            .eq("id", review.card_id)
-            .eq("user_id", user.id)
-            .maybe_single()
-        )
-        if not res.data:
-            continue
-
-        current_state = res.data.get("fsrs_data") or new_card_state()
-        new_state, review_log = review_card_state(current_state, rating)
-        await db(
-            supabase.table("cards")
-            .update(
-                {
-                    "fsrs_data": new_state,
-                    "next_review": next_review(new_state).isoformat(),
-                    "last_review": now,
-                }
-            )
-            .eq("id", review.card_id)
-        )
-        # Append the graded review to the log so progress metrics (positive
-        # recalls, review activity over time) exist; fsrs_data keeps no counts.
-        # `session_id` lets recaps show the plan's chosen cards and this
-        # session's per-card results.
-        await db(
-            supabase.table("card_reviews").insert(
-                {
-                    "card_id": review.card_id,
-                    "user_id": user.id,
-                    "session_id": session["id"],
-                    "language": language,
-                    **review_log,
-                }
-            )
-        )
+        await apply_fsrs_review(review.card_id, user.id, session["id"], language, review.outcome)
 
     profile_updates = analysis.profile_updates.model_dump(exclude_none=True)
     if profile_updates:
@@ -494,6 +880,20 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
         for message in (transcript.data or [])
         if message.get("speaker") == "user"
     )
+    # The lessons this session ran (and their per-lesson outcomes), always in
+    # recap order; the recap page renders these instead of the retired plan.
+    recap["lessons"] = [
+        {
+            "id": lesson["id"],
+            "status": lesson.get("status"),
+            "title": (lesson.get("spec") or {}).get("title"),
+            "template": (lesson.get("spec") or {}).get("template"),
+            "template_name": template_name((lesson.get("spec") or {}).get("template")),
+            "summary": lesson.get("summary"),
+            "bonus_uses_count": len(lesson.get("summary", {}).get("bonus_uses") or []),
+        }
+        for lesson in lessons
+    ]
     # Always present so the recap page can render review material without
     # re-querying the cards table (empty when nothing was created).
     recap["new_cards"] = [{"type": c.type, "front": c.front, "back": c.back} for c in new_cards]
@@ -521,46 +921,19 @@ async def chat(request: ChatRequest, user=Depends(get_current_user)):
     session = await get_owned_session(request.session_id, user.id)
     if session["status"] != "active":
         raise HTTPException(status_code=409, detail="Session has already ended")
-    profile = await asyncio.to_thread(fetch_effective_profile, user.id, session.get("language"))
+    language = session.get("language")
+    profile = await asyncio.to_thread(fetch_effective_profile, user.id, language)
 
     # Record the user's turn before responding so a mid-stream failure cannot lose it.
     await asyncio.to_thread(insert_transcript, session["id"], "user", request.message)
 
-    # The plan's opening hook steers only the first reply; later turns already
-    # have history, so drop it to avoid a re-greeting mid-session.
-    plan: dict[str, Any] | None = session.get("plan")
-    if plan and request.history:
-        plan = {key: value for key, value in plan.items() if key != "opening_hook"}
+    deps = await build_tutor_deps(
+        user.id, session["id"], language, session_lessons(session), profile, request.history
+    )
 
-    deps: TutorDeps = {
-        "user_id": user.id,
-        "user_profile": profile,
-        "session_id": session["id"],
-        "session_plan": plan,
-    }
-    history = pydantic_history(request.history)
-
-    async def event_generator():
-        full_response = ""
-        try:
-            async with tutor_agent.run_stream(
-                request.message, message_history=history, deps=deps
-            ) as result:
-                async for delta in result.stream_text(delta=True):
-                    full_response += delta
-                    yield sse({"type": "delta", "text": delta})
-        except Exception:
-            logger.exception("chat stream failed")
-            yield sse(
-                {"type": "error", "message": "The tutor hit an unexpected error. Please try again."}
-            )
-        finally:
-            # Save whatever the tutor produced, even if the stream failed mid-way.
-            if full_response:
-                await asyncio.to_thread(insert_transcript, session["id"], "tutor", full_response)
-        yield sse({"type": "done"})
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return sse_stream(
+        tutor_frames(request.message, pydantic_history(request.history), deps, session["id"])
+    )
 
 
 if __name__ == "__main__":
