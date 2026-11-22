@@ -51,8 +51,8 @@ away in this rework — every agent moves onto gemma4:31b-cloud (see Decisions).
 - **One model lane**: every agent — the streaming tutor included — runs `gemma4:31b-cloud`
   (`services/llm.py` collapses to a single `LLM_MODEL`; granite is retired). Native tool calling
   on gemma is what makes tutor-driven transitions dependable, and the stronger model simply does
-  the tutor's job better. If live testing shows chat turns are sluggish, tune the tutor lane's
-  `reasoning_effort` (e.g. `none`) — not the model choice.
+  the tutor's job better. Model settings are left at their defaults — any "too slow" concern is
+  raised by the product owner from actual use, and handled then.
 - **Nothing legacy**: no compatibility shims anywhere — `sessions.plan` and the planner's
   `opening_hook` field go away entirely (destructive migration; old rows are cleared), and the
   new `sessions.lessons` array is the single lesson store.
@@ -157,8 +157,7 @@ mirror into `frontend/lib/lesson-templates.ts` (names + per-template copy), repl
     completion); steer to the `intro_line`; when the objectives are covered or the learner wants
     out, wrap up and call `complete_lesson`. After `complete_lesson`: return to casual mode, no
     re-greeting, no repetition of done material.
-- **Tools** (pydantic-ai tools on the same gemma4 lane — native tool calling; the residual risk is
-  cloud turn latency, see Risks):
+- **Tools** (pydantic-ai tools on the same gemma4 lane — native tool calling):
   - `propose_lesson(idea: str = "")` — guarded to `small_talk`; pushes `proposal_generating`, runs
     the planner (same gemma lane, 10–40 s), writes the proposal row (`sessions.lessons`), pushes `proposal_ready`, returns a short ack telling the tutor to invite the learner
     to look at the card (its own reply stays chat-shaped, no material dump).
@@ -299,8 +298,8 @@ Tests:
 
 ## Steps
 
-1. **One model lane + planner rework**: `services/llm.py` → single `LLM_MODEL` (gemma4 everywhere;
-   tutor `ModelSettings` tuned after live measurement), `.env` swap; migration (`sessions.lessons`,
+1. **One model lane + planner rework**: `services/llm.py` → single `LLM_MODEL` (gemma4
+   everywhere, default settings), `.env` swap; migration (`sessions.lessons`,
    `DROP COLUMN plan`, `transcripts.payload`, `card_reviews.lesson_id`); `lesson_material.py`;
    rework `lesson_templates.py`; planner rework (block validation, no `opening_hook`);
    `lesson_flow.py` (instance CRUD, phase derivation). Backend tests for schema/guards.
@@ -312,9 +311,9 @@ Tests:
 4. **Accept/decline endpoints** (accept streams the opener turn) with tests.
 5. **Frontend**: data-part mapping in the proxy, lesson components, page rework, restore replay,
    recap page, template copy; offline vitest suite extended.
-6. **Live integration** (`uv run task test:all`): tutor on gemma4:31b-cloud — measure chat turn
-   latency and tool-call behavior first (the gating assumptions, see Risks), planner block
-   validity per template, grader outcomes, then `uv run task test:e2e` for the end-to-end loop.
+6. **Live integration** (`uv run task test:all`): tutor tool-call behavior on gemma4:31b-cloud
+   verified first (see Risks), planner block validity per template, grader outcomes, then
+   `uv run task test:e2e` for the end-to-end loop.
 7. **Gates + docs**: `uv run task test`, `uv run ruff check .`, `uv run task check:frontend` (fix
    before claiming done; `uv run task tidy`); update root `AGENTS.md` (architecture blurb: phase
    loop, new endpoints, event protocol, single model lane — the "two lanes" description goes) and
@@ -322,12 +321,12 @@ Tests:
 
 ## Risks & fallbacks
 
-- **Cloud chat latency/cost** now applies to every tutor turn (gemma4:31b-cloud streams; tool
-  calls add round-trips mid-stream). This is the accepted price of the stronger model — measure
-  early (step 6 gate: time-to-first-token and full-turn latency); if sluggish, set
-  `reasoning_effort: none` for the tutor only. The UI affordances (Accept button, "Finish lesson")
-  and a lightweight backend safety net (force-propose when `smalltalk_turns ≥ 4`, and every +3
-  thereafter with a fresh idea) keep transitions working regardless of model behavior.
+- **Cloud chat latency/cost** applies to every tutor turn (gemma4:31b-cloud streams; tool calls
+  add round-trips mid-stream) and is accepted as-is: default model settings, no latency tuning in
+  this rework — the product owner will voice it if it feels slow in use. The UI affordances
+  (Accept button, "Finish lesson") and a lightweight backend safety net (force-propose when
+  `smalltalk_turns ≥ 4`, and every +3 thereafter with a fresh idea) keep transitions working
+  regardless of model behavior.
 - **ai@7 custom data parts API** must be verified from the installed package docs before the proxy
   work (breaking-change-era versions; no node_modules in worktrees until `npm install`).
 - **Planner latency** (10–40 s cloud generation of full material): shown as `proposal_generating`;
@@ -343,8 +342,7 @@ Tests:
   green (typecheck + lint + vitest).
 - Live (`uv run task test:all`): planner emits template-valid blocks for all 6 templates; the
   tutor (gemma4:31b-cloud) triggers `propose_lesson` after the nudge and completes lessons via
-  `complete_lesson`; chat turn latency is acceptable (tune tutor `reasoning_effort` if not);
-  grader outcomes land in FSRS + `card_reviews`.
+  `complete_lesson`; grader outcomes land in FSRS + `card_reviews`.
 - `uv run task dev` manual pass: greet → 4–5 turns of plain small talk (no scaffolding, no early
   proposal) → proposal card appears → Accept → material renders visually distinct + opener
   streams → lesson runs → lesson-summary card with ✅/👀/⭐ → natural small-talk continuation, no
