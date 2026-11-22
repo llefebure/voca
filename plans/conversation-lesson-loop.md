@@ -21,13 +21,16 @@ Plus three cross-cutting requirements:
   (a reading passage is visually distinct from a chat bubble; a menu is rendered as a menu).
 - **Review-word injection throughout**, with learners getting **credit** for demonstrating
   understanding of a brought-up review word, and **bonus credit** for using it correctly in context.
+- **Generic material primitives, not hardcoded artifacts**: a menu is not a block type — it is
+  `text` content (markdown, tables supported) plus a scenario/dialogue about it, exactly like a
+  reading passage with discussion questions. The block set stays small and composable.
 - A formal lesson targets **~5–10 minutes** (short, contained exercise).
 
-Current seams that make this viable: sessions already carry JSONB (`plan`, `recap`); the chat
-lane (granite4.2:3b local) streams SSE deltas through a proxy that re-frames them into AI SDK
-UI-message-stream; the planning lane (gemma4:31b-cloud) produces schema-valid structured output
-for the planner and post-session analyst; `card_reviews` already records per-session FSRS grades
-with a recognition/pass/strong_pass outcome ladder.
+Current seams that make this viable: sessions already carry JSONB (`plan`, `recap`) and the chat
+SSE proxy already re-frames backend frames into AI SDK UI-message-stream; `card_reviews` already
+records per-session FSRS grades with a recognition/pass/strong_pass outcome ladder. The current
+two-lane model split (chat = granite4.2:3b local, structured agents = gemma4:31b-cloud) goes
+away in this rework — every agent moves onto gemma4:31b-cloud (see Decisions).
 
 ## Decisions made in this plan (flag anything you disagree with before implementation)
 
@@ -44,8 +47,14 @@ with a recognition/pass/strong_pass outcome ladder.
   tutor brought it up) → `recognition_pass`; in-context production → `pass`/`strong_pass` as the
   "bonus" — credited per lesson (guaranteed) and swept again at session end for small-talk usage.
   Live per-message bonus chips are a stretch goal, not v1.
-- `sessions.plan` keeps holding the *pending proposal* (legacy column, read by the recap page for
-  old sessions); new completed/declined lessons accumulate in `sessions.lessons`.
+- **One model lane**: every agent — the streaming tutor included — runs `gemma4:31b-cloud`
+  (`services/llm.py` collapses to a single `LLM_MODEL`; granite is retired). Native tool calling
+  on gemma is what makes tutor-driven transitions dependable, and the stronger model simply does
+  the tutor's job better. If live testing shows chat turns are sluggish, tune the tutor lane's
+  `reasoning_effort` (e.g. `none`) — not the model choice.
+- **Nothing legacy**: no compatibility shims anywhere — `sessions.plan` and the planner's
+  `opening_hook` field go away entirely (destructive migration; old rows are cleared), and the
+  new `sessions.lessons` array is the single lesson store.
 
 ## Approach
 
@@ -55,34 +64,34 @@ Templates stay a data catalog ("adding a lesson format means adding one entry");
 a declared **material schema** — the typed blocks the planner must produce — plus a minutes hint
 and a phase outline the tutor follows.
 
-Block types (pydantic models in **new** `services/lesson_material.py`, discriminated by `type`):
+Block types (pydantic models in **new** `services/lesson_material.py`, discriminated by `type`) —
+a deliberately small, composable primitive set. Documents are *content, never types*: a menu,
+a flyer, a listing or a reading passage are all `text` (markdown — tables included):
 
 | Block | Fields | Rendered as |
 |---|---|---|
 | `scenario` | `setting`, `learner_role`, `tutor_role`, `goal` | tinted "setting the scene" card |
-| `passage` | `title`, `paragraphs[]` (written for the learner's level) | reading card, large serif text + 🔊 play (TTS) |
-| `questions` | `items[]` | numbered list attached below a `passage` |
-| `menu` | `title`, `sections[{name, items[{name, desc?, price}]}]` | styled menu card |
+| `text` | `title?`, `markdown` (written for the learner's level — a passage, a menu as a markdown table, a flyer, a booking confirmation…) | material reading card (markdown incl. tables) + 🔊 play (TTS) |
 | `dialogue` | `turns[{speaker: "tutor"\|"learner", text}]` (learner turns may be `""` = gaps) | script card, gaps shown as fill-in lines |
-| `rounds` | `items[{task, target}]` | quick-fire task list |
+| `questions` | `items[]` | numbered list attached below a `text` block |
+| `tasks` | `items[{task, hint?}]` | checkbox-style task/goal list |
 | `word_bank` | `items[]` | chips row of target expressions |
-| `goal_list` | `items[]` | checkbox-style objective list |
 
 V1 template set (minutes; material; outline):
 
-1. `role_play` — 5–10 — `scenario` (+ optional `menu`/`word_bank` prop) — set the scene → perform
-   (introduce one small complication midway) → debrief key phrases.
-2. `reading_discussion` — 5–10 — `passage` + `questions` — read (learner; tutor reads aloud on
+1. `role_play` — 5–10 — `scenario` + optional `text` prop (e.g. a menu as a markdown table, a
+   flyer, an appointment card) + optional `word_bank` — set the scene → perform (introduce one
+   small complication midway) → debrief key phrases. A restaurant-menu encounter is this template
+   with a menu-shaped `text` block; nothing menu-specific exists in code.
+2. `reading_discussion` — 5–10 — `text` + `questions` — read (learner; tutor reads aloud on
    request) → answer 3–5 literal→inference questions → learner's opinion.
-3. `menu_role_play` — 5–10 — `menu` + `scenario` — restaurant/service encounter around the menu
-   (ordering, questions, a problem with the order).
-4. `dialogue_gaps` — 5–8 — `dialogue` (+ `word_bank`) — preview the target phrases → learner fills
+3. `dialogue_gaps` — 5–8 — `dialogue` (+ `word_bank`) — preview the target phrases → learner fills
    the gaps line by line → replay one exchange freely.
-5. `story_telling` — 5–10 — `scenario` (story starter) + `word_bank` — elicit a narration → recast
+4. `story_telling` — 5–10 — `scenario` (story starter) + `word_bank` — elicit a narration → recast
    tense/connector mistakes → learner retells one improved bit.
-6. `explain_describe` — 5–8 — `goal_list` (+ `word_bank`) — 2–4 describe/explain tasks (your city,
-   how to cook X, compare two things), tutor asks follow-ups.
-7. `sentence_sprint` — 3–6 — `rounds` (+ `word_bank`) — 4–6 quick production tasks, one target
+5. `explain_describe` — 5–8 — `tasks` (+ `word_bank`) — 2–4 describe/explain tasks (your city, how
+   to cook X, compare two things), tutor asks follow-ups.
+6. `sentence_sprint` — 3–6 — `tasks` (+ `word_bank`) — 4–6 quick production tasks, one target
    structure each; brisk pacing, tutor keeps score.
 
 Planned v2 (recorded in the catalog as placeholders/comment, not implementable): `opinion_debate`,
@@ -96,9 +105,11 @@ mirror into `frontend/lib/lesson-templates.ts` (names + per-template copy), repl
 
 ### 2. Session state machine (DB + `services/lesson_flow.py`)
 
-- Migration: `sessions.lessons JSONB NOT NULL DEFAULT '[]'`; `transcripts.payload JSONB` (nullable —
-  structured-event rows: `speaker='system'`, `payload={kind, data}`); `card_reviews.lesson_id TEXT`
-  (nullable, set when a grade came from a lesson grader).
+- Migration: `ALTER TABLE sessions ADD COLUMN lessons JSONB NOT NULL DEFAULT '[]'` +
+  `ALTER TABLE sessions DROP COLUMN plan;` (destructive — no legacy rows kept);
+  `ALTER TABLE transcripts ADD COLUMN payload JSONB` (nullable — structured-event rows:
+  `speaker='system'`, `payload={kind, data}`); `ALTER TABLE card_reviews ADD COLUMN lesson_id
+  TEXT` (nullable, set when a grade came from a lesson grader).
 - A **Lesson instance** is `{id, status: proposed|active|completed|declined, spec, material,
   target_cards: [{id, front, back}], reason, proposed_at, accepted_at, completed_at, grades,
   summary}`. At most one non-terminal lesson per session (backend-enforced guard in new
@@ -106,8 +117,8 @@ mirror into `frontend/lib/lesson-templates.ts` (names + per-template copy), repl
 - **Phase is derived**, never stored: `small_talk` (no non-terminal lesson) / `awaiting_accept` /
   `lesson` — helpers in `lesson_flow.py` used by `/chat` deps and both new endpoints. This replaces
   any `current_phase`-style column (dropped in `20261116000000_quality_cleanup.sql`).
-- `sessions.plan` (pending proposal payload) keeps its column and stays readable by the recap page,
-  but is no longer written after this rework; the lessons array is the source of truth.
+- `sessions.plan` is **dropped** with the migration above; the lessons array is the single source
+  of truth for lesson state (the recap page's `session.plan` read is deleted along with it).
 
 ### 3. Reworked planner agent (`agents/session_planner_agent.py`)
 
@@ -120,8 +131,9 @@ mirror into `frontend/lib/lesson-templates.ts` (names + per-template copy), repl
   discussed — the main new input), lessons already done/declined this session (avoid repeats and
   don't re-propose a declined idea), and an optional `idea` string (the learner's requested topic,
   when the proposal is learner-initiated).
-- Instructions: instantiate one template's blocks concretely for this learner (`passage` at their
-  level; `menu` with plausible prices; `dialogue` gaps solvable with the word bank); pick 3–8
+- Instructions: instantiate one template's blocks concretely for this learner (`text` written at
+  their level — document-shaped content like a menu is written as a markdown table inside it;
+  `dialogue` gaps solvable with the word bank); pick 3–8
   target cards relevant to the lesson; keep the `objectives` checkable within the minutes hint;
   `intro_line` in the target language, short, no lists.
 - `/sessions/plan` (the endpoint) is **removed**. The planner is invoked from the tutor's
@@ -144,10 +156,10 @@ mirror into `frontend/lib/lesson-templates.ts` (names + per-template copy), repl
     completion); steer to the `intro_line`; when the objectives are covered or the learner wants
     out, wrap up and call `complete_lesson`. After `complete_lesson`: return to casual mode, no
     re-greeting, no repetition of done material.
-- **Tools** (pydantic-ai tools on the granite chat lane — the key new risk, see Risks):
+- **Tools** (pydantic-ai tools on the same gemma4 lane — native tool calling; the residual risk is
+  cloud turn latency, see Risks):
   - `propose_lesson(idea: str = "")` — guarded to `small_talk`; pushes `proposal_generating`, runs
-    the planner (planning lane, 10–40 s), writes the proposal row (`sessions.lessons` + pending
-    snapshot), pushes `proposal_ready`, returns a short ack telling the tutor to invite the learner
+    the planner (same gemma lane, 10–40 s), writes the proposal row (`sessions.lessons`), pushes `proposal_ready`, returns a short ack telling the tutor to invite the learner
     to look at the card (its own reply stays chat-shaped, no material dump).
   - `begin_lesson()` — guarded to `pending proposal exists`; activates it, records `lesson_started`
     transcript event, ack: "your next words open the lesson with its `intro_line`".
@@ -184,13 +196,13 @@ data: {"type":"done"} / {"type":"error"}                       (unchanged)
   continue-session; the restored view also re-derives banner state from `sessions.lessons` (any
   active lesson → lesson banner + material; proposed-but-unanswered → proposal card again).
 
-Explicit non-goal: live credit chips (`credit` events from a granite `record_usage` tool) — deferred;
-guaranteed credit in §6 already rewards production use.
+Explicit non-goal: live credit chips (`credit` events from a tutor-side `record_usage` tool) —
+deferred; guaranteed credit in §6 already rewards production use.
 
 ### 6. Grading loop — credit & "bonus points"
 
-- **New `agents/lesson_grader_agent.py`** (planning lane): input = the lesson (spec, material, the
-  slide of transcript since `lesson_started`), target cards; output = `LessonGrades {grades:
+- **New `agents/lesson_grader_agent.py`** (same gemma lane): input = the lesson (spec, material,
+  the slide of transcript since `lesson_started`), target cards; output = `LessonGrades {grades:
   [{card_id, outcome}], summary: {headline, positives[], key_phrases[]}, bonus_uses:
   [{card_id, sentence}]}`. Outcomes reuse the existing ladder: `recognition_pass` (the learner
   clearly understood when the tutor brought the word up) → FSRS Easy-with-recognition rating as
@@ -219,11 +231,11 @@ guaranteed credit in §6 already rewards production use.
 - **Message flow**: data parts render via the new components inside the existing
   `MessageScroller`/`Bubble` pattern; the `data-status` part renders the shimmer chip; Accept
   streams the opener reply through the same `useChat` message list; TTS behavior unchanged for text
-  bubbles; `passage` blocks get a play button reusing `useSpeech`.
+  bubbles; `text` blocks get a play button reusing `useSpeech`.
 - **Restore** (`?session=` continue): replay `transcripts` including `payload` event rows; fetch
   `sessions.lessons` for banner/pending state.
-- **Recap page**: per-lesson section replaces `SessionPlanShape`; keep `session.plan` fallback for
-  legacy rows.
+- **Recap page**: per-lesson section replaces the old plan display; the `SessionPlanShape` /
+  `session.plan` code path is deleted together with the column.
 - Extend offline tests (Vitest + RTL with the supabase mock): proposal accept/decline flows,
   material block rendering (incl. an unknown block type → graceful fallback), restore replay of
   payload rows, and pages-smoke for the reworked pages.
@@ -236,13 +248,16 @@ guaranteed credit in §6 already rewards production use.
 - `POST /sessions/plan` — **removed** (frontends never call it; planner is tool-internal).
 - `POST /sessions/start` — no longer plans anything (no other change).
 - `POST /sessions/end` — analyst input swap (`lessons`), graded-card exclusion, recap shape.
-- Migration ~`20261201000000_lesson_loop.sql`: `sessions.lessons` JSONB, `transcripts.payload`
-  JSONB, `card_reviews.lesson_id` TEXT.
+- Migration ~`20261201000000_lesson_loop.sql`: `sessions.lessons` JSONB, `DROP COLUMN
+  sessions.plan`, `transcripts.payload` JSONB, `card_reviews.lesson_id` TEXT.
+- `services/llm.py` — one lane: `LLM_MODEL` (default `gemma4:31b-cloud`); `LLM_PLANNING_MODEL` and
+  the granite-specific settings disappear; `src/voca/.env` updated to match.
 
 ## Files to modify
 
 Backend:
-- `src/voca/services/lesson_templates.py` (new taxonomy + per-template block schemas),
+- `src/voca/services/llm.py` (collapse to one lane), `src/voca/services/lesson_templates.py`
+  (new taxonomy + per-template block schemas),
   `src/voca/services/lesson_material.py` (new, block models), `src/voca/services/lesson_flow.py`
   (new, state machine + guards + helpers)
 - `src/voca/agents/tutor_agent.py` (phases, tools, event queue), `src/voca/agents/
@@ -258,7 +273,7 @@ Frontend:
   `lib/lesson-events.ts` (new, typed payload shapes shared by components)
 - `components/lesson/proposal-card.tsx`, `components/lesson/material-blocks.tsx`,
   `components/lesson/lesson-summary.tsx` (new)
-- `app/recap/[sessionId]/page.tsx` (lessons section + legacy fallback)
+- `app/recap/[sessionId]/page.tsx` (lessons section; plan read removed)
 - `lib/languages.ts` (drop `LESSON_TEMPLATE_NAMES` mirror, now in `lesson-templates.ts`)
 
 Tests:
@@ -270,8 +285,10 @@ Tests:
 
 ## Reuse
 
-- Two model lanes (`services/llm.py`) and pydantic-ai Agent/output-type patterns — unchanged;
-  the tutor keeps `run_stream` + granite; new agents ride the planning lane with `retries=3`.
+- Single model lane (`services/llm.py`): all agents on `gemma4:31b-cloud` through one `LLM_MODEL`
+  constant — the existing `OllamaModel`/`OllamaProvider` builder is reused; pydantic-ai
+  `Agent`/`output_type` patterns unchanged; new structured agents keep `retries=3`; the tutor
+  keeps `run_stream`.
 - `lesson_flow`'s proposal writing reuses the `/sessions/plan` body from `main.py` today
   (fetch due cards → run planner → resolve card content → store) — moved into a service fn.
 - FSRS plumbing (`review_card_state`, `VOCA_RATING_MAP`, `card_reviews` insert block in
@@ -281,8 +298,10 @@ Tests:
 
 ## Steps
 
-1. **Planner + taxonomy + material models**: migration, `lesson_material.py`, rework
-   `lesson_templates.py`, planner rework (block validation, no `opening_hook`),
+1. **One model lane + planner rework**: `services/llm.py` → single `LLM_MODEL` (gemma4 everywhere;
+   tutor `ModelSettings` tuned after live measurement), `.env` swap; migration (`sessions.lessons`,
+   `DROP COLUMN plan`, `transcripts.payload`, `card_reviews.lesson_id`); `lesson_material.py`;
+   rework `lesson_templates.py`; planner rework (block validation, no `opening_hook`);
    `lesson_flow.py` (instance CRUD, phase derivation). Backend tests for schema/guards.
 2. **Tutor rework + event pump**: tools, phase prompts, deps assembly, `/chat` side-channel and
    frames; remove `/sessions/plan`; transcript payload rows. Unit tests with `TestModel` tool
@@ -292,22 +311,22 @@ Tests:
 4. **Accept/decline endpoints** (accept streams the opener turn) with tests.
 5. **Frontend**: data-part mapping in the proxy, lesson components, page rework, restore replay,
    recap page, template copy; offline vitest suite extended.
-6. **Live integration** (`uv run task test:all`): granite tool-call reliability first (the gate
-   for the whole design — see Risks), planner block validity per template, grader outcomes,
-   then `uv run task test:e2e` for the end-to-end loop.
+6. **Live integration** (`uv run task test:all`): tutor on gemma4:31b-cloud — measure chat turn
+   latency and tool-call behavior first (the gating assumptions, see Risks), planner block
+   validity per template, grader outcomes, then `uv run task test:e2e` for the end-to-end loop.
 7. **Gates + docs**: `uv run task test`, `uv run ruff check .`, `uv run task check:frontend` (fix
    before claiming done; `uv run task tidy`); update root `AGENTS.md` (architecture blurb: phase
-   loop, new endpoints, event protocol) and `frontend/AGENTS.md` if test conventions shift.
+   loop, new endpoints, event protocol, single model lane — the "two lanes" description goes) and
+   `frontend/AGENTS.md` if test conventions shift.
 
 ## Risks & fallbacks
 
-- **Granite 4.2:3b tool-calling reliability is the design's load-bearing assumption.** Mitigations:
-  tiny tool schemas, guard rails that correct the model (tool returns "propose only in casual
-  chat" strings), structured offline + live tests of the exact tool sequences. **Fallback (still
-  shippable)**: the backend force-proposes when `smalltalk_turns ≥ 4` (and every +3 thereafter,
-  with a fresh idea) by pushing `proposal_ready` itself, so lesson transitions never depend on the
-  model; `begin_lesson`/`complete_lesson` equivalents come from the UI (Accept button; a
-  "Finish lesson" affordance in the material panel). Decide granularly per tool after step 6.
+- **Cloud chat latency/cost** now applies to every tutor turn (gemma4:31b-cloud streams; tool
+  calls add round-trips mid-stream). This is the accepted price of the stronger model — measure
+  early (step 6 gate: time-to-first-token and full-turn latency); if sluggish, set
+  `reasoning_effort: none` for the tutor only. The UI affordances (Accept button, "Finish lesson")
+  and a lightweight backend safety net (force-propose when `smalltalk_turns ≥ 4`, and every +3
+  thereafter with a fresh idea) keep transitions working regardless of model behavior.
 - **ai@7 custom data parts API** must be verified from the installed package docs before the proxy
   work (breaking-change-era versions; no node_modules in worktrees until `npm install`).
 - **Planner latency** (10–40 s cloud generation of full material): shown as `proposal_generating`;
@@ -321,9 +340,10 @@ Tests:
 
 - Offline: `uv run task test` green; `uv run ruff check .` clean; `uv run task check:frontend`
   green (typecheck + lint + vitest).
-- Live (`uv run task test:all`): planner emits template-valid blocks for all 7 templates on
-  gemma4:31b-cloud; granite tutor triggers `propose_lesson` after the nudge and completes lessons
-  via `complete_lesson`; grader outcomes land in FSRS + `card_reviews`.
+- Live (`uv run task test:all`): planner emits template-valid blocks for all 6 templates; the
+  tutor (gemma4:31b-cloud) triggers `propose_lesson` after the nudge and completes lessons via
+  `complete_lesson`; chat turn latency is acceptable (tune tutor `reasoning_effort` if not);
+  grader outcomes land in FSRS + `card_reviews`.
 - `uv run task dev` manual pass: greet → 4–5 turns of plain small talk (no scaffolding, no early
   proposal) → proposal card appears → Accept → material renders visually distinct + opener
   streams → lesson runs → lesson-summary card with ✅/👀/⭐ → natural small-talk continuation, no
