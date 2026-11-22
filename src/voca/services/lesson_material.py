@@ -187,11 +187,15 @@ BLOCK_TYPE_NAMES: dict[str, str] = {
 
 
 def parse_material(raw: list[dict]) -> list[MaterialBlock]:
-    """Validate already-stored material (defensive read path: drop invalid blocks)."""
+    """Validate stored/planner material (defensive read path: drop invalid blocks).
+
+    Normalization runs here too, so restored sessions and any caller passing raw
+    model-shaped dicts get the same tolerance as the planner's live validation.
+    """
     kept: list[MaterialBlock] = []
     for block in raw:
         try:
-            kept.append(BLOCK_ADAPTER.validate_python(block, strict=False))
+            kept.append(BLOCK_ADAPTER.validate_python(normalize_block(block), strict=False))
         except Exception:  # noqa: BLE001 - a bad stored block must not break rendering
             continue
     return kept
