@@ -31,7 +31,12 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 from voca.agents.lesson_grader_agent import GraderDeps, lesson_grader_agent
 from voca.agents.post_session_agent import CardCandidate, post_session_agent
 from voca.agents.session_planner_agent import PlannerDeps, session_planner_agent
-from voca.agents.tutor_agent import TutorDeps, tutor_agent
+from voca.agents.tutor_agent import (
+    TutorDeps,
+    execute_leaked,
+    parse_tool_leak,
+    tutor_agent,
+)
 from voca.services import lesson_flow
 from voca.services.languages import DEFAULT_LANGUAGE
 from voca.services.lesson_templates import find_template, template_name
@@ -45,6 +50,11 @@ from voca.services.srs import (
 from voca.services.supabase_client import supabase
 
 load_dotenv()
+
+# How much of the streamed tail may still be forming a leaked tool call
+# (`<tool_code>` head, `call:<name>`): hidden until it resolves into a span.
+_LEAK_HOLD = 24
+_LEAK_PASSTHROUGH_CAP = 1200
 
 app = FastAPI(title="Voca Backend")
 
@@ -417,8 +427,14 @@ async def run_proposal(user_id: str, session_id: str, language: str, idea: str =
         except Exception:
             logger.exception("lesson planner run failed")
             return None
+
+        def _dump(block: Any) -> dict[str, Any]:
+            # The real planner produces pydantic block models; raw dicts (fakes,
+            # defensive paths) pass straight through.
+            return block.model_dump() if hasattr(block, "model_dump") else dict(block)
+
         blocks, dropped = lesson_flow.validate_material(
-            proposal.lesson.template, [b.model_dump() for b in proposal.material]
+            proposal.lesson.template, [_dump(b) for b in proposal.material]
         )
         missing = required_missing_blocks(proposal.lesson.template, [b.type for b in blocks])
         target_cards = [by_id[cid] for cid in proposal.target_card_ids or [] if cid in by_id]
@@ -609,8 +625,10 @@ async def tutor_frames(
     """Stream one tutor reply as SSE-ready frames, interleaved with tool events.
 
     Text deltas and events produced by the tutor's tools share one queue, so the
-    tool events arrive in order with the surrounding text. The tutor's full text
-    is persisted as a transcript row even when the stream fails mid-way.
+    tool events arrive in order with the surrounding text. Tool calls that leak
+    through streaming as raw text (`call:<tool>{...}`) are captured, hidden from
+    the visible reply, and executed for real. The tutor's full text is persisted
+    as a transcript row even when the stream fails mid-way.
     """
     full_response = ""
     queue = deps["events"]
@@ -618,12 +636,55 @@ async def tutor_frames(
     try:
         async with tutor_agent.run_stream(prompt, message_history=history, deps=deps) as result:
 
-            async def consume():
+            async def emit(text: str) -> None:
+                if not text:
+                    return
                 nonlocal full_response
+                full_response += text
+                await queue.put({"type": "delta", "text": text})
+
+            async def consume():
+                pending = ""
                 try:
                     async for delta in result.stream_text(delta=True):
-                        full_response += delta
-                        await queue.put({"type": "delta", "text": delta})
+                        pending += delta
+                        while True:
+                            parsed = parse_tool_leak(pending)
+                            if not parsed:
+                                break
+                            before, name, args, consumed = parsed
+                            await emit(before)
+                            pending = pending[consumed:]
+                            logger.info("captured leaked tool call: %s (%s)", name, args)
+                            await execute_leaked(name, args, deps)
+                        # Hold back only a tail that could still be a leak head;
+                        # give up entirely when a held span outgrows the cap.
+                        flush = len(pending)
+                        if flush > _LEAK_PASSTHROUGH_CAP:
+                            await emit(pending)
+                            pending = ""
+                        else:
+                            for tag in ("call:", "<tool_code>"):
+                                idx = pending.rfind(tag)
+                                if idx != -1:
+                                    flush = min(flush, idx)
+                            flush = max(flush - _LEAK_HOLD, 0)
+                            if flush:
+                                await emit(pending[:flush])
+                                pending = pending[flush:]
+                    # Stream over: flush the rest (executing a complete call if
+                    # its markup closed in the final delta).
+                    while True:
+                        parsed = parse_tool_leak(pending)
+                        if not parsed:
+                            break
+                        before, name, args, consumed = parsed
+                        await emit(before)
+                        pending = pending[consumed:]
+                        logger.info("captured leaked tool call: %s (%s)", name, args)
+                        await execute_leaked(name, args, deps)
+                    if pending.strip():
+                        await emit(pending)
                 finally:
                     await queue.put(None)
 

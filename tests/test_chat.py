@@ -545,3 +545,141 @@ async def test_run_proposal_rejects_missing_required_blocks(fake_supabase, monke
     lesson = await voca_main.run_proposal("user-1", "sess-1", "es")
     assert lesson is None
     assert calls == 2  # one retry with corrective feedback before giving up
+
+
+# --- Streamed tool-call leak capture --------------------------------------------------
+
+
+class LeakyTutorAgent:
+    """A fake tutor that embeds a raw, leaked tool call in its streamed text."""
+
+    def __init__(self, chunks: list[str]) -> None:
+        self.chunks = chunks
+
+    @contextlib.asynccontextmanager
+    async def run_stream(self, _prompt, deps=None, **_kwargs: Any):
+        yield FakeStreamResult(self.chunks)
+
+
+@pytest.mark.asyncio
+async def test_chat_captures_leaked_tool_call_into_a_real_event(client, monkeypatch, fake_supabase):
+    """`call:propose_lesson{...}` leaking as text becomes a proposal_ready event."""
+    fake_supabase.results[("sessions", "select")] = [active_session_response(lessons=[])]
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
+    fake_supabase.results[("cards", "select")] = [
+        {"id": "card-1", "front": "quisiera", "back": "I would like"}
+    ]
+    fake_supabase.results[("transcripts", "select")] = [
+        {
+            "speaker": "user",
+            "text": "cada vez más picante…",
+            "created_at": "2025-01-01T00:00:01+00:00",
+        }
+    ]
+    from voca.agents.session_planner_agent import LessonProposal
+    from voca.services.lesson_flow import LessonSpec as LessonSpecModel
+    from voca.services.lesson_material import ScenarioBlock
+
+    proposal = LessonProposal(
+        lesson=LessonSpecModel(
+            template="role_play",
+            title="At the café",
+            objectives=["order"],
+            minutes=6,
+        ),
+        material=[
+            ScenarioBlock(
+                setting="a café", learner_role="customer", tutor_role="barista", goal="order"
+            )
+        ],
+        target_card_ids=["card-1"],
+        intro_line="¡Hola!",
+        reason="the picante story",
+    )
+
+    async def fake_planner_run(_prompt, deps=None):
+        return type("R", (), {"output": proposal})()
+
+    monkeypatch.setattr(voca_main.session_planner_agent, "run", fake_planner_run)
+
+    leak = '¡Qué picante! call:propose_lesson{idea:<|"|>la ciencia del picante<|"|>}<tool_call|>'
+    monkeypatch.setattr(voca_main, "tutor_agent", LeakyTutorAgent([leak]))
+
+    response = await client.post(
+        "/chat", json={"message": "jaja sí", "session_id": "sess-1"}, headers=AUTH
+    )
+    events = sse_events(response.text)
+    statuses = [event["text"] for event in events if event["type"] == "status"]
+    assert statuses == ["Designing your lesson…"]
+    structured = [event for event in events if event["type"] == "event"]
+    assert structured and structured[0]["kind"] == "proposal_ready"
+    assert structured[0]["data"]["lesson"]["spec"]["title"] == "At the café"
+    # The leaked call syntax never reaches the visible chat.
+    deltas = "".join(event["text"] for event in events if event["type"] == "delta")
+    assert "call:propose_lesson" not in deltas
+    assert "¡Qué picante!" in deltas
+    # The proposal is persisted in the session's lessons array.
+    stored = fake_supabase.updated_rows("sessions")[-1]["values"]["lessons"]
+    assert stored and stored[0]["status"] == "proposed"
+
+
+@pytest.mark.asyncio
+async def test_chat_leak_without_tool_match_stays_visible_text(client, monkeypatch, fake_supabase):
+    """A leaked span for an unknown tool is left as plain text (no crash)."""
+    fake_supabase.results[("sessions", "select")] = [active_session_response(lessons=[])]
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
+    fake_supabase.results[("cards", "select")] = []
+
+    monkeypatch.setattr(
+        voca_main, "tutor_agent", LeakyTutorAgent(["todo: call:some_other_tool{x:1} después"])
+    )
+    response = await client.post(
+        "/chat", json={"message": "hola", "session_id": "sess-1"}, headers=AUTH
+    )
+    deltas = "".join(
+        event["text"] for event in sse_events(response.text) if event["type"] == "delta"
+    )
+    assert "some_other_tool" in deltas
+
+
+@pytest.mark.asyncio
+async def test_chat_captures_tool_code_leak(client, monkeypatch, fake_supabase):
+    """The `<tool_code>propose_lesson(idea="…")</tool_code>` shape becomes an event."""
+    fake_supabase.results[("sessions", "select")] = [active_session_response(lessons=[])]
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
+    fake_supabase.results[("cards", "select")] = []
+    fake_supabase.results[("transcripts", "select")] = [
+        {"speaker": "user", "text": "hola café", "created_at": "2025-01-01T00:00:01+00:00"}
+    ]
+
+    from voca.agents.session_planner_agent import LessonProposal
+    from voca.services.lesson_flow import LessonSpec
+    from voca.services.lesson_material import ScenarioBlock
+
+    proposal = LessonProposal(
+        lesson=LessonSpec(template="role_play", title="Café", objectives=["order"]),
+        material=[
+            ScenarioBlock(
+                setting="a café", learner_role="customer", tutor_role="barista", goal="order"
+            )
+        ],
+        target_card_ids=[],
+        intro_line="¡Hola!",
+        reason="reason",
+    )
+
+    async def fake_planner_run(_prompt, deps=None):
+        return type("R", (), {"output": proposal})()
+
+    monkeypatch.setattr(voca_main.session_planner_agent, "run", fake_planner_run)
+    leak = '<tool_code>\npropose_lesson(idea="café role play")\n</tool_code>\n'
+    monkeypatch.setattr(voca_main, "tutor_agent", LeakyTutorAgent([leak]))
+
+    response = await client.post(
+        "/chat", json={"message": "hola", "session_id": "sess-1"}, headers=AUTH
+    )
+    events = sse_events(response.text)
+    structured = [event for event in events if event["type"] == "event"]
+    assert structured and structured[0]["kind"] == "proposal_ready"
+    deltas = "".join(event["text"] for event in events if event["type"] == "delta")
+    assert "tool_code" not in deltas and "propose_lesson(" not in deltas

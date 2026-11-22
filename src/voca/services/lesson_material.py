@@ -125,7 +125,36 @@ def normalize_block(block: Any) -> Any:
         block = {**block, "type": inferred}
     else:
         block = {**block, "type": _TYPE_ALIASES[raw_type]}
-    return block
+    return _coerce_items(block, str(block["type"]))
+
+
+def _coerce_items(payload: dict[str, Any], block_type: str) -> dict[str, Any]:
+    """Flatten model-invented item shapes into each block's declared schema."""
+    items = payload.get("items")
+    if not items:
+        return payload
+    if block_type == "word_bank" and any(isinstance(item, dict) for item in items):
+        payload = {
+            **payload,
+            "items": [
+                (
+                    item.get("term")
+                    or item.get("phrase")
+                    or item.get("word")
+                    or item.get("es")
+                    or str(item)
+                )
+                if isinstance(item, dict)
+                else str(item)
+                for item in items
+            ],
+        }
+    elif block_type == "tasks" and any(isinstance(item, str) for item in items):
+        payload = {
+            **payload,
+            "items": [{"task": str(item)} if isinstance(item, str) else item for item in items],
+        }
+    return payload
 
 
 def normalize_blocks(blocks: Any) -> Any:

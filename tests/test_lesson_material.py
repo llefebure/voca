@@ -6,6 +6,7 @@ bare `{"setting": …}`) and uses alias names (`menu`/`passage` → `text`,
 retry loop only burns on real content problems.
 """
 
+from voca.services.lesson_flow import validate_material
 from voca.services.lesson_material import (
     BLOCK_ADAPTER,
     MATERIAL_ADAPTER,
@@ -80,3 +81,30 @@ def test_validated_list_roundtrip_through_the_adapter():
         )
     )
     assert [block.type for block in parsed] == ["scenario", "text"]
+
+
+def test_word_bank_items_emitted_as_term_objects_get_flattened():
+    """The model invents `{"term": …, "translation": …}` word-bank rows; flatten them."""
+    blocks, _ = validate_material(
+        "dialogue_gaps",
+        [
+            {
+                "type": "word_bank",
+                "items": [
+                    {"term": "Agrio / Ácido", "translation": "Sour / Acidic"},
+                    {"phrase": "Dulce"},
+                    "Salado",
+                ],
+            }
+        ],
+    )
+    assert blocks[0].items == ["Agrio / Ácido", "Dulce", "Salado"]
+
+
+def test_tasks_items_emitted_as_plain_strings_get_wrapped():
+    blocks, _ = validate_material(
+        "sentence_sprint",
+        [{"type": "tasks", "items": ["Di qué comiste ayer", {"task": "Pide la cuenta"}]}],
+    )
+    assert blocks[0].items[0].task == "Di qué comiste ayer"
+    assert blocks[0].items[1].task == "Pide la cuenta"
