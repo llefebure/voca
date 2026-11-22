@@ -18,7 +18,8 @@ a fundamentally different shape:
 Plus three cross-cutting requirements:
 
 - **Lesson taxonomy** — more structured lesson types, each with typed material the UI can render
-  (a reading passage is visually distinct from a chat bubble; a menu is rendered as a menu).
+  (a reading passage is visually distinct from a chat bubble; a menu renders as styled `text`
+  material, not as a chat bubble).
 - **Review-word injection throughout**, with learners getting **credit** for demonstrating
   understanding of a brought-up review word, and **bonus credit** for using it correctly in context.
 - **Generic material primitives, not hardcoded artifacts**: a menu is not a block type — it is
