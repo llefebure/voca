@@ -572,9 +572,9 @@ async def test_grade_and_complete_writes_fsrs_and_recap_payload(client, fake_sup
         assert deps["lesson"]["spec"]["title"] == "At the café"
         grades = LessonGrades(
             grades=[
-                TargetGrade(card_id="card-1", outcome="pass", bonus_use=True, evidence="lo usó"),
+                TargetGrade(card_id="card-1", outcome="pass", evidence="lo usó"),
                 # A card the lesson never targeted — must be ignored.
-                TargetGrade(card_id="card-9", outcome="miss", bonus_use=False, evidence="x"),
+                TargetGrade(card_id="card-9", outcome="miss", evidence="x"),
             ],
             summary=LessonSummary(headline="Great", positives=[], key_phrases=[]),
             bonus_uses=["Quisiera un cortado."],

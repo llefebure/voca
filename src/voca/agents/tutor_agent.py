@@ -107,12 +107,13 @@ def _small_talk_block(deps: TutorDeps, smalltalk_turns: int) -> str:
     ]
     if smalltalk_turns >= NudgeTurn and not deps.get("pending_proposal"):
         parts.append(
-            f"NUDGE: you are ~{smalltalk_turns} turns into casual chat and the learner "
-            "seems settled. A structured mini-lesson would be valuable now: propose ONE "
-            "concrete idea clearly tied to what they have been talking about, in one "
-            "short sentence, and call `propose_lesson` with it as the idea. If they just "
-            "gave you a lesson idea, propose that. After a refusal, don't re-offer for "
-            "a while and never with the same idea.\n"
+            "NUDGE (IMPORTANT): it is now time to offer a lesson — the learner is settled "
+            "into casual chat. In THIS reply you must: (1) name ONE concrete lesson idea "
+            "clearly tied to what they just talked about, and (2) call `propose_lesson` "
+            "with it as the idea (when they gave a lesson idea themselves, use exactly "
+            "that). Do not just ask a follow-up question instead. After the tool result, "
+            "invite them to have a look at the card — one short line. If they decline, "
+            "stay in casual chat and do not re-offer the same idea again.\n"
         )
     due = deps.get("due_cards", [])
     if due:

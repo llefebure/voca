@@ -484,7 +484,9 @@ async def grade_and_complete(user_id: str, session_id: str, language: str | None
         {
             "card_id": grade.card_id,
             "outcome": grade.outcome,
-            "bonus_use": grade.bonus_use,
+            # The bonus is derived, not judged separately: pass/strong_pass means
+            # the learner produced the phrase correctly in context.
+            "bonus_use": grade.outcome in lesson_flow.PRODUCTION_OUTCOMES,
             "evidence": grade.evidence,
         }
         for grade in grades.grades

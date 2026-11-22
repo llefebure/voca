@@ -7,9 +7,9 @@ recognition. Also writes a short per-lesson summary the UI shows as the
 lesson-completion card.
 """
 
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent, RunContext
 
 from voca.services.languages import language_name
@@ -26,24 +26,41 @@ class CardGrade(BaseModel):
         )
     )
     evidence: str = Field(description="The transcript moment this grade comes from")
-    bonus_use: bool = Field(
-        default=False,
-        description="True only for pass/strong_pass: the learner PRODUCED it correctly in context",
-    )
+
+    @field_validator("card_id", mode="before")
+    @classmethod
+    def _clean_card_id(cls, value: Any) -> Any:
+        # The model sometimes decorates ids ('[card-1]'); strip the decoration so
+        # grades still match the target ids.
+        if isinstance(value, str):
+            return value.strip().strip("[]").strip()
+        return value
 
 
 class LessonSummary(BaseModel):
     headline: str = Field(description="One vivid sentence about how the lesson went (English)")
-    positives: list[str] = Field(description="2-4 specific things the learner did well")
-    key_phrases: list[str] = Field(description="2-4 phrases worth remembering (target language)")
+    positives: list[str] = Field(default=[], description="2-4 specific things the learner did well")
+    key_phrases: list[str] = Field(
+        default=[], description="2-4 phrases worth remembering (target language)"
+    )
 
 
 class LessonGrades(BaseModel):
     grades: list[CardGrade]
     summary: LessonSummary
     bonus_uses: list[str] = Field(
-        description="Sentences from the learner that used a target phrase correctly in context"
+        default=[],
+        description="Sentences from the learner that used a target phrase correctly in context",
     )
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def _coerce_summary(cls, value: Any) -> Any:
+        # The model sometimes writes the summary as a plain string; treat it as
+        # the headline rather than failing the whole output.
+        if isinstance(value, str):
+            return {"headline": value}
+        return value
 
 
 class GraderDeps(TypedDict):

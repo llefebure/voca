@@ -7,21 +7,42 @@ lesson material is generated here so accepting a proposal starts the lesson
 with zero additional generation wait.
 """
 
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent, RunContext
 
 from voca.services.languages import language_name
 from voca.services.lesson_flow import LessonSpec
-from voca.services.lesson_material import MaterialBlock
+from voca.services.lesson_material import MaterialList
 from voca.services.lesson_templates import template_catalog, template_ids
 from voca.services.llm import voca_model
 
 
+def _untangle_proposal(value: Any) -> Any:
+    """Recover the model's common shape slips before schema validation.
+
+    ``material`` and ``target_card_ids`` sometimes arrive nested inside
+    ``lesson`` (they were one object in an earlier schema); lift them to the
+    top level so the real schema can fail for real problems, not shape ones.
+    """
+    if not isinstance(value, dict):
+        return value
+    lesson = value.get("lesson")
+    if isinstance(lesson, dict):
+        for key in ("material", "target_card_ids"):
+            if key in lesson and key not in value:
+                return {**value, key: lesson.pop(key)}
+    return value
+
+
 class LessonProposal(BaseModel):
+    """One lesson proposal; pydantic-ai wraps the model's tool call in this schema."""
+
+    model_config = {"extra": "ignore"}
+
     lesson: LessonSpec
-    material: list[MaterialBlock] = Field(
+    material: MaterialList = Field(
         description=(
             "The lesson's visual material, containing exactly the blocks this template "
             "requires and optionally its allowed extras. Documents (passage, menu, flyer…) "
@@ -40,6 +61,11 @@ class LessonProposal(BaseModel):
     reason: str = Field(
         description="One sentence (English): why this lesson fits this learner right now"
     )
+
+    @field_validator("lesson", mode="before")
+    @classmethod
+    def _untangle(cls, value: Any) -> Any:
+        return _untangle_proposal(value)
 
 
 class PlannerDeps(TypedDict):

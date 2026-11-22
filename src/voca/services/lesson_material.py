@@ -7,9 +7,9 @@ produces these; the UI renders each with its own distinct visual treatment; the
 session stores them so a continued session can replay the lesson.
 """
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, BeforeValidator, Field, TypeAdapter
 
 
 class ScenarioBlock(BaseModel):
@@ -62,10 +62,86 @@ class WordBankBlock(BaseModel):
     items: list[str] = Field(description="3-8 target expressions shown as chips")
 
 
+# The model sometimes emits block payloads without the `type` tag — key-wrapped
+# ({"scenario": {...}}) or bare ({"setting": ...}) — or uses alias names. Coerce
+# to the tagged shape before union validation; real content problems still fail.
+_TYPE_ALIASES: dict[str, str] = {
+    "scenario": "scenario",
+    "text": "text",
+    "passage": "text",
+    "menu": "text",
+    "document": "text",
+    "props": "text",
+    "flyer": "text",
+    "dialogue": "dialogue",
+    "script": "dialogue",
+    "questions": "questions",
+    "task": "tasks",
+    "tasks": "tasks",
+    "rounds": "tasks",
+    "goal_list": "tasks",
+    "word_bank": "word_bank",
+}
+
+
+def _tag_from_key_or_fields(block: dict[str, Any]) -> str | None:
+    if len(block) == 1:
+        ((key, _value),) = block.items()
+        if key in _TYPE_ALIASES:
+            return _TYPE_ALIASES[key]
+    if "setting" in block:
+        return "scenario"
+    if "turns" in block:
+        return "dialogue"
+    if "markdown" in block or ("title" in block and "items" not in block):
+        return "text"
+    if "items" in block:
+        items = block["items"]
+        first = items[0] if items else None
+        if isinstance(first, dict):
+            return "tasks"
+        if items and all(not str(item).strip().endswith("?") for item in items):
+            return "word_bank"
+        return "questions"
+    return None
+
+
+def normalize_block(block: Any) -> Any:
+    """Coerce a model-emitted material block into the tagged, union-ready shape."""
+    if not isinstance(block, dict):
+        return block
+    # Key-wrapped payloads first: {"rounds": {"items": …}} / {"text": {"markdown": …}}.
+    if len(block) == 1:
+        ((key, value),) = block.items()
+        if isinstance(value, dict) and key in _TYPE_ALIASES:
+            block = dict(value)
+    raw_type = block.get("type")
+    if not isinstance(raw_type, str) or raw_type not in _TYPE_ALIASES:
+        inferred = _tag_from_key_or_fields(block)
+        if inferred is None:
+            inferred = raw_type if isinstance(raw_type, str) else None
+            if inferred is None:
+                return block
+        block = {**block, "type": inferred}
+    else:
+        block = {**block, "type": _TYPE_ALIASES[raw_type]}
+    return block
+
+
+def normalize_blocks(blocks: Any) -> Any:
+    """Apply `normalize_block` over a material list (pass-through otherwise)."""
+    if isinstance(blocks, list):
+        return [normalize_block(block) for block in blocks]
+    return blocks
+
+
 MaterialBlock = Annotated[
     ScenarioBlock | TextBlock | DialogueBlock | QuestionsBlock | TasksBlock | WordBankBlock,
     Field(discriminator="type"),
 ]
+
+# The planner's material field: model-tolerant (untagged/aliased shapes normalized).
+MaterialList = Annotated[list[MaterialBlock], BeforeValidator(normalize_blocks)]
 
 # One adapter per payload shape used across the app.
 BLOCK_ADAPTER: TypeAdapter[MaterialBlock] = TypeAdapter(MaterialBlock)
