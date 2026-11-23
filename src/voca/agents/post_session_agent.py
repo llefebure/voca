@@ -32,6 +32,32 @@ NEW_CARDS_RULES = (
 )
 
 
+# The FSRS rubric: maps transcript evidence straight onto the FSRS statuses
+# (via VOCA_RATING_MAP). Recall quality is part of the outcome definitions, so
+# there is no separate recall/bonus scale anywhere in the product. Kept as a
+# module constant so tests can assert the rubric stays prompt-visible.
+FSRS_RUBRIC = (
+    "Grade every DUE card by ID, from transcript evidence alone. One rubric maps "
+    "what the learner did to the FSRS rating — recall is inside the outcomes, do "
+    "not grade on any separate scale:\n"
+    "   - 'strong_pass' (FSRS Easy): the learner produced the item correctly, "
+    "unprompted, in a fluent and natural sentence.\n"
+    "   - 'pass' (FSRS Good): the learner recalled or produced it correctly, but "
+    "with visible effort — hesitation, a restart, a reformulation — or needed a "
+    "gentle prompt and absorbed it.\n"
+    "   - 'recognition_pass' (FSRS Easy): the learner did not produce the item, "
+    "but clearly understood it in context — their reply reacted to it correctly "
+    "(answering a question that used it, acting on the information). "
+    "Comprehension counts as the recall this rating needs.\n"
+    "   - 'miss' (FSRS Again): the learner tried and failed (wrong form, kept to "
+    "the tutor's correction), asked what it means, or could not recall it at all.\n"
+    "   - 'not_attempted': the item never genuinely came up — no production, no "
+    "comprehension signal.\n"
+    "   Strict rule: grade ONLY what the transcript shows. When in doubt between "
+    "two outcomes, take the lower one.\n"
+)
+
+
 # Response structure for the post-session agent
 class CardCandidate(BaseModel):
     type: str = Field(description="Card type: 'word', 'phrase', 'correction', or 'grammar'")
@@ -50,8 +76,12 @@ class SessionRecap(BaseModel):
 class CardGrade(BaseModel):
     card_id: str
     outcome: str = Field(
-        description="Outcome: 'strong_pass', 'pass', 'recognition_pass', 'miss', or 'not_attempted'"
+        description=(
+            "Outcome from the FSRS rubric: 'strong_pass', 'pass', 'recognition_pass', "
+            "'miss', or 'not_attempted'"
+        )
     )
+    evidence: str = Field(description="The transcript line that justifies the outcome")
 
 
 class ProfileUpdates(BaseModel):
@@ -78,9 +108,6 @@ class PostSessionDeps(TypedDict):
     # Recent card front/back pairs (no FSRS state): new cards must not duplicate them.
     existing_cards: NotRequired[list[dict]]
     target_language: NotRequired[str | None]
-    # This session's lesson instances (completed/declined): informs the recap; the
-    # analyst never re-grades lesson target cards (main.py filters them out already).
-    lessons: NotRequired[list[dict]]
 
 
 post_session_agent = Agent(
@@ -91,19 +118,16 @@ post_session_agent = Agent(
     retries=3,
     instructions=(
         "You are a language learning analyst. Your job is to review a conversation transcript "
-        "between a language tutor and a learner and extract valuable learning material. "
-        "The session may have contained structured lessons (already graded elsewhere — never "
-        "grade their target cards) alongside casual small talk; grade anything the lessons "
-        "did not cover.\n\n"
+        "between a language tutor and a learner and map it onto the learner's FSRS card "
+        "statuses, plus extract valuable learning material.\n\n"
         "1. NEW CARDS: "
         + NEW_CARDS_RULES
-        + "2. GRADES: Grade every DUE card by ID as attempted or not_attempted, based on the "
-        "transcript (recognition_pass when the learner understood it without producing it).\n"
-        "3. RECAP: Create an encouraging and concise recap of the session, informed by the "
-        "session's lessons (their summaries show how each went) and the small talk around "
-        "them — do not invent metrics like minutes spoken. Return the recap as the structured "
-        "object the schema defines (positives, key_corrections, next_time_preview), never as "
-        "a plain string.\n"
+        + "2. GRADES — THE FSRS RUBRIC: "
+        + FSRS_RUBRIC
+        + "3. RECAP: Write an encouraging and concise recap of the session — what was talked "
+        "about, what the learner handled well and what needed help. Do not invent metrics "
+        "like minutes spoken. Return the recap as the structured object the schema defines "
+        "(positives, key_corrections, next_time_preview), never as a plain string.\n"
         "4. PROFILE: Suggest updates to the user's profile based on evidence in the transcript "
         "(e.g., newly mentioned interests, improved fluency). Leave fields you have no "
         "evidence for unset."
@@ -112,7 +136,7 @@ post_session_agent = Agent(
 
 
 @post_session_agent.instructions
-def inject_post_session_deps(ctx: RunContext[PostSessionDeps]) -> str:
+def post_session_instructions(ctx: RunContext[PostSessionDeps]) -> str:
     language = language_name(ctx.deps.get("target_language"))
     transcript_text = "\n".join(f"{m['speaker']}: {m['text']}" for m in ctx.deps["transcript"])
     due_cards_text = "\n".join(
@@ -122,21 +146,10 @@ def inject_post_session_deps(ctx: RunContext[PostSessionDeps]) -> str:
     existing_cards_text = "\n".join(
         f"- {c.get('front', '')}: {c.get('back', '')}" for c in ctx.deps.get("existing_cards", [])
     )
-    lessons = ctx.deps.get("lessons") or []
-    lessons_text = "\n".join(
-        f"- {lesson.get('status', '?')}: {(lesson.get('spec') or {}).get('title', '?')}"
-        + (
-            f" — summary: {(lesson.get('summary') or {}).get('headline', '')}"
-            if lesson.get("summary")
-            else ""
-        )
-        for lesson in lessons
-    )
     return (
         f"TARGET LANGUAGE: {language}\n\n"
         f"SESSION TRANSCRIPT:\n{transcript_text}\n\n"
-        f"DUE CARDS TO EVALUATE (grade by ID; lesson-covered cards already excluded):\n{due_cards_text}\n\n"
+        f"DUE CARDS TO EVALUATE (grade every one by ID with the FSRS rubric):\n{due_cards_text}\n\n"
         f"EXISTING CARDS (the learner already has these — never create a card whose front "
-        f"or back matches any of them):\n{existing_cards_text}\n\n"
-        f"THIS SESSION'S LESSONS:\n{lessons_text or '(none — pure small-talk session)'}"
+        f"or back matches any of them):\n{existing_cards_text}"
     )

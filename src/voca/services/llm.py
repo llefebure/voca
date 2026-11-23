@@ -1,7 +1,7 @@
 """Shared LLM configuration for all Voca agents (local Ollama server, OpenAI-compatible).
 
 One lane, one model: every agent — the streaming tutor included — runs the same
-cloud model. Native tool calling is what makes tutor-driven lesson transitions
+cloud model. Native tool calling is what makes tutor-driven canvas panels
 dependable, and the strong model does the tutor's job better too. Model settings
 stay at their defaults; any "too slow" concern is raised from real use and
 handled then, not pre-tuned here.

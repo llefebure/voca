@@ -8,7 +8,6 @@ import { Badge } from '@/components/ui/badge'
 import { useRouter } from 'next/navigation'
 import { CheckCircle, XCircle, BookOpen, ArrowRight, TrendingUp, Target } from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
-import { lessonTemplateName } from '@/lib/lesson-templates'
 
 type RecapData = {
   positives?: string[]
@@ -17,19 +16,6 @@ type RecapData = {
   user_word_count?: number
   // The analyst's new cards for this session (always present; empty when none).
   new_cards?: { type: string; front: string; back: string }[]
-  // The lessons this session ran, in order (small-talk-only sessions: empty).
-  lessons?: SessionLesson[]
-}
-
-// Per-lesson entries the backend writes into this session's recap.
-type SessionLesson = {
-  id?: string
-  status?: string
-  title?: string
-  template?: string
-  template_name?: string
-  summary?: { headline?: string; positives?: string[]; key_phrases?: string[]; bonus_uses?: string[] }
-  bonus_uses_count?: number
 }
 
 export default function RecapPage({ params }: { params: Promise<{ sessionId: string }> }) {
@@ -141,55 +127,6 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
                 </ul>
               </div>
             </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-xl flex items-center gap-2">
-              <Target className="h-5 w-5 text-primary" />
-              Lessons
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {!recap.lessons || recap.lessons.length === 0 ? (
-              <p className="text-muted-foreground italic text-center py-4">
-                Pure small talk this session — no structured lessons.
-              </p>
-            ) : (
-              <div className="grid gap-3">
-                {recap.lessons.map((lesson, i) => (
-                  <div key={lesson.id ?? i} className="space-y-2 rounded-xl border p-4 bg-card shadow-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="space-y-0.5 min-w-0">
-                        <p className="text-sm font-semibold">{lesson.title ?? 'Lesson'}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {lesson.template_name ?? lessonTemplateName(lesson.template)}
-                        </p>
-                      </div>
-                      {(lesson.bonus_uses_count ?? 0) > 0 ? (
-                        <Badge variant="secondary" className="shrink-0">
-                          ⭐ {lesson.bonus_uses_count} bonus {lesson.bonus_uses_count === 1 ? 'use' : 'uses'}
-                        </Badge>
-                      ) : null}
-                    </div>
-                    {lesson.summary?.headline ? (
-                      <p className="text-sm">{lesson.summary.headline}</p>
-                    ) : null}
-                    {lesson.summary?.positives && lesson.summary.positives.length > 0 ? (
-                      <ul className="space-y-1">
-                        {lesson.summary.positives.map((positive, j) => (
-                          <li key={j} className="flex items-start gap-2 text-xs text-muted-foreground">
-                            <span className="mt-0.5">•</span>
-                            {positive}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            )}
           </CardContent>
         </Card>
 

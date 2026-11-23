@@ -1,17 +1,30 @@
-"""Material shape normalization: the planner's output is coerced before validation.
+"""Panel block shape normalization: the tutor's `show_panel` call is coerced
+before validation.
 
 gemma emits block payloads without the union tag (key-wrapped `{"scenario": {...}}`,
 bare `{"setting": …}`) and uses alias names (`menu`/`passage` → `text`,
 `rounds`/`goal_list` → `tasks`); `normalize_blocks` recovers all of them so the
-retry loop only burns on real content problems.
+tool call rarely fails on shape alone.
 """
 
-from voca.services.lesson_flow import validate_material
-from voca.services.lesson_material import (
+from voca.services.panel_content import (
     BLOCK_ADAPTER,
-    MATERIAL_ADAPTER,
     normalize_blocks,
+    parse_panels,
 )
+
+
+def parse_blocks(raw: list[dict]):
+    """The validate path the show_panel tool uses: normalize + validate per block."""
+    from voca.services.panel_content import BLOCK_ADAPTER
+
+    kept, _ = [], []
+    for block in normalize_blocks(raw):
+        try:
+            kept.append(BLOCK_ADAPTER.validate_python(block, strict=False))
+        except Exception:
+            continue
+    return kept
 
 
 def _kinds(raw: list[dict]) -> list[str]:
@@ -66,7 +79,7 @@ def test_bare_payloads_infer_their_type_from_fields():
 
 
 def test_validated_list_roundtrip_through_the_adapter():
-    parsed = MATERIAL_ADAPTER.validate_python(
+    parsed = parse_panels(
         normalize_blocks(
             [
                 {
@@ -85,8 +98,7 @@ def test_validated_list_roundtrip_through_the_adapter():
 
 def test_word_bank_items_emitted_as_term_objects_get_flattened():
     """The model invents `{"term": …, "translation": …}` word-bank rows; flatten them."""
-    blocks, _ = validate_material(
-        "dialogue_gaps",
+    blocks = parse_blocks(
         [
             {
                 "type": "word_bank",
@@ -96,15 +108,14 @@ def test_word_bank_items_emitted_as_term_objects_get_flattened():
                     "Salado",
                 ],
             }
-        ],
+        ]
     )
     assert blocks[0].items == ["Agrio / Ácido", "Dulce", "Salado"]
 
 
 def test_tasks_items_emitted_as_plain_strings_get_wrapped():
-    blocks, _ = validate_material(
-        "sentence_sprint",
-        [{"type": "tasks", "items": ["Di qué comiste ayer", {"task": "Pide la cuenta"}]}],
+    blocks = parse_blocks(
+        [{"type": "tasks", "items": ["Di qué comiste ayer", {"task": "Pide la cuenta"}]}]
     )
     assert blocks[0].items[0].task == "Di qué comiste ayer"
     assert blocks[0].items[1].task == "Pide la cuenta"
@@ -112,8 +123,7 @@ def test_tasks_items_emitted_as_plain_strings_get_wrapped():
 
 def test_vocab_pair_items_in_a_tasks_block_are_retyped_as_word_bank():
     """gemma tags vocabulary rows `tasks` and gives them term/translation objects."""
-    blocks, dropped = validate_material(
-        "reading_discussion",
+    blocks = parse_blocks(
         [
             {"type": "text", "markdown": "passage"},
             {"type": "questions", "items": ["Q?"]},
@@ -130,21 +140,19 @@ def test_vocab_pair_items_in_a_tasks_block_are_retyped_as_word_bank():
     assert kinds == ["text", "questions", "word_bank"]
     word_bank = blocks[2]
     assert word_bank.items == ["quisiera…", "la cuenta"]
-    assert dropped == []
 
 
 def test_double_escaped_newlines_in_text_survive_as_line_breaks():
     """gemma emits literal \\n sequences inside markdown (verified in stored data);
     they must decode into real line breaks so tables/paragraphs render."""
-    blocks, _ = validate_material(
-        "reading_discussion",
+    blocks = parse_blocks(
         [
             {
                 "type": "text",
                 "markdown": "**Hotel Sol y Luna**\\n\\n| Hora | Act |\\n| :--- | :--- |\\n| 08:00 | Desayuno |",
             },
             {"type": "questions", "items": ["¿Cómo fue el viaje?\\n¿Qué visitaste?"]},
-        ],
+        ]
     )
     markdown = blocks[0].markdown
     assert "\\n" not in markdown

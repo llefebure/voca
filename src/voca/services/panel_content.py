@@ -1,15 +1,16 @@
-"""Lesson material blocks: the typed, renderable primitives that make up a lesson.
+"""Panel content blocks: the typed, renderable primitives of a canvas panel.
 
 A deliberately small, composable set — documents are *content, never types*: a
 menu, a flyer, a listing or a reading passage are all `text` (markdown, tables
-included) plus whatever scenario/dialogue/questions surround it. The planner
-produces these; the UI renders each with its own distinct visual treatment; the
-session stores them so a continued session can replay the lesson.
+included) plus whatever scenario/dialogue/questions surround it. The tutor
+produces these in its `show_panel` tool call; the UI renders each type with its
+own distinct visual treatment; the transcript stores them so a continued
+session can replay the panel.
 """
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, BeforeValidator, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter
 
 
 class ScenarioBlock(BaseModel):
@@ -119,7 +120,7 @@ def _has_vocab_keys(item: Any) -> bool:
 def _clean_strings(value: Any) -> Any:
     """Decode escape sequences gemma double-escapes inside tool-arg strings.
 
-    Verified live: material text arrives with literal ``\\n`` (and occasionally
+    Verified live: panel text arrives with literal ``\\n`` (and occasionally
     ``\\r``/``\\t``) sequences instead of real line breaks; decode them.
     """
     if isinstance(value, str):
@@ -137,14 +138,18 @@ def _clean_strings(value: Any) -> Any:
 
 
 def normalize_block(block: Any) -> Any:
-    """Coerce a model-emitted material block into the tagged, union-ready shape."""
+    """Coerce a model-emitted panel block into the tagged, union-ready shape."""
     if not isinstance(block, dict):
         return block
     # Key-wrapped payloads first: {"rounds": {"items": …}} / {"text": {"markdown": …}}.
+    # A single key holding a LIST wraps it as the items of the aliased type.
     if len(block) == 1:
         ((key, value),) = block.items()
-        if isinstance(value, dict) and key in _TYPE_ALIASES:
-            block = dict(value)
+        if key in _TYPE_ALIASES:
+            if isinstance(value, dict):
+                block = dict(value)
+            elif isinstance(value, list):
+                block = {"items": value}
     raw_type = block.get("type")
     if not isinstance(raw_type, str) or raw_type not in _TYPE_ALIASES:
         inferred = _tag_from_key_or_fields(block)
@@ -204,23 +209,19 @@ def _coerce_items(payload: dict[str, Any], block_type: str) -> tuple[dict[str, A
 
 
 def normalize_blocks(blocks: Any) -> Any:
-    """Apply `normalize_block` over a material list (pass-through otherwise)."""
+    """Apply `normalize_block` over a panel block list (pass-through otherwise)."""
     if isinstance(blocks, list):
         return [normalize_block(block) for block in blocks]
     return blocks
 
 
-MaterialBlock = Annotated[
+PanelBlock = Annotated[
     ScenarioBlock | TextBlock | DialogueBlock | QuestionsBlock | TasksBlock | WordBankBlock,
     Field(discriminator="type"),
 ]
 
-# The planner's material field: model-tolerant (untagged/aliased shapes normalized).
-MaterialList = Annotated[list[MaterialBlock], BeforeValidator(normalize_blocks)]
-
 # One adapter per payload shape used across the app.
-BLOCK_ADAPTER: TypeAdapter[MaterialBlock] = TypeAdapter(MaterialBlock)
-MATERIAL_ADAPTER: TypeAdapter[list[MaterialBlock]] = TypeAdapter(list[MaterialBlock])
+BLOCK_ADAPTER: TypeAdapter[PanelBlock] = TypeAdapter(PanelBlock)
 
 BLOCK_TYPE_NAMES: dict[str, str] = {
     "scenario": "Scenario",
@@ -232,25 +233,16 @@ BLOCK_TYPE_NAMES: dict[str, str] = {
 }
 
 
-def parse_material(raw: list[dict]) -> list[MaterialBlock]:
-    """Validate stored/planner material (defensive read path: drop invalid blocks).
+def parse_panels(raw: list[dict]) -> list[PanelBlock]:
+    """Validate stored model blocks (defensive read path: drop invalid blocks).
 
     Normalization runs here too, so restored sessions and any caller passing raw
-    model-shaped dicts get the same tolerance as the planner's live validation.
+    model-shaped dicts get the same tolerance as the live tool-call validation.
     """
-    kept: list[MaterialBlock] = []
+    kept: list[PanelBlock] = []
     for block in raw:
         try:
             kept.append(BLOCK_ADAPTER.validate_python(normalize_block(block), strict=False))
         except Exception:  # noqa: BLE001 - a bad stored block must not break rendering
             continue
     return kept
-
-
-def filter_allowed(
-    blocks: list[MaterialBlock], allowed: set[str]
-) -> tuple[list[MaterialBlock], list[str]]:
-    """Split blocks into (allowed, rejected) by block type."""
-    kept = [b for b in blocks if b.type in allowed]
-    dropped = [b.type for b in blocks if b.type not in allowed]
-    return kept, dropped

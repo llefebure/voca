@@ -18,18 +18,13 @@ import {
 import { supabase } from '@/lib/supabase'
 import { BACKEND_URL } from '@/lib/api'
 import { DEFAULT_LANGUAGE, languageName } from '@/lib/languages'
-import type { ChatDataTypes, LessonInstance } from '@/lib/lesson-events'
-import { cleanEscapedText } from '@/lib/lesson-events'
+import type { ChatDataTypes, PanelInstance } from '@/lib/panel-events'
+import { cleanEscapedText } from '@/lib/panel-events'
 import { useLanguage } from '@/components/language-context'
 import { useSpeech } from '@/lib/use-speech'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { Markdown } from '@/components/markdown'
-import { lessonTemplateName } from '@/lib/lesson-templates'
-import {
-  LessonThreadBlock,
-  MaterialBlocksList,
-  ProposalCard,
-} from '@/components/lesson/lesson-components'
+import { PanelCanvas, PanelRecord } from '@/components/panel/panel-components'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -78,7 +73,7 @@ const TUTOR_AVATAR = (
   </Avatar>
 )
 
-/** The chat page's message type: text + typed lesson data parts. */
+/** The chat page's message type: text + typed panel data parts. */
 export type VocaUIMessage = UIMessage<unknown, ChatDataTypes>
 
 type ChatStatus = 'submitted' | 'streaming' | 'ready' | 'error'
@@ -162,7 +157,8 @@ function ChatView({
   const [ending, setEnding] = React.useState(false)
   const [confirmEnd, setConfirmEnd] = React.useState(false)
   const [sessionId, setSessionId] = React.useState<string | null>(null)
-  const [acceptingLessonId, setAcceptingLessonId] = React.useState<string | null>(null)
+  // Panels the user folded away with the canvas ✕ (server history unaffected).
+  const [dismissedPanelIds, setDismissedPanelIds] = React.useState<Set<string>>(() => new Set())
   const sessionIdRef = React.useRef<string | null>(null)
   const lastSpokenRef = React.useRef<string | null>(null)
   // Synchronous guard for Enter-key double submits: state alone can lag one render.
@@ -201,81 +197,110 @@ function ChatView({
 
   const streaming = status === 'streaming' || status === 'submitted'
 
-  /** Ordered render positions with the lesson (if any) each part belongs to. */
-  const { entries, lessonTimeline } = React.useMemo(() => {
-    type WalkEntry = {
+  /** Ordered walked entries (one per message part) + the panels shown so far. */
+  const entries = React.useMemo(() => {
+    const walked: {
       message: VocaUIMessage
       messageIndex: number
       partIndex: number
       part: VocaUIMessage['parts'][number]
-      lessonId: string | null
-    }
-    const walked: WalkEntry[] = []
-    const timeline = new Map<
-      string,
-      { lesson: LessonInstance; completed: LessonInstance | null; start: number; end: number | null }
-    >()
-    let insideLesson: string | null = null
+    }[] = []
     messages.forEach((message, messageIndex) => {
       message.parts.forEach((part, partIndex) => {
-        let lessonId: string | null = insideLesson
-        if (part.type === 'data-lesson_started') {
-          lessonId = part.data.lesson.id
-          insideLesson = lessonId
-          if (!timeline.has(lessonId)) {
-            timeline.set(lessonId, {
-              lesson: part.data.lesson,
-              completed: null,
-              start: walked.length,
-              end: null,
-            })
-          }
-        } else if (part.type === 'data-lesson_completed' && insideLesson) {
-          lessonId = insideLesson
-          const entry = timeline.get(lessonId)
-          if (entry) {
-            entry.completed = part.data.lesson
-            entry.end = walked.length
-          }
-        }
-        walked.push({ message, messageIndex, partIndex, part, lessonId })
+        walked.push({ message, messageIndex, partIndex, part })
       })
-      // A `lesson_completed` event ends the lesson mid-message: parts AFTER it in
-      // the same message belong to the main thread again.
-      const completedHere = message.parts.find((part) => part.type === 'data-lesson_completed')
-      if (completedHere && completedHere.type === 'data-lesson_completed') {
-        insideLesson = null
-      }
     })
-    return { entries: walked, lessonTimeline: timeline }
+    return walked
   }, [messages])
 
-  // The lesson state drives the phase banner + split view.
-  const { activeLesson, pendingProposal } = React.useMemo(() => {
-    let active: LessonInstance | null = null
-    let pending: LessonInstance | null = null
-    for (const message of messages) {
-      for (const part of message.parts) {
-        if (part.type === 'data-proposal_ready') {
-          pending = part.data.lesson
-        } else if (part.type === 'data-lesson_started') {
-          active = part.data.lesson
-          pending = null
-        } else if (part.type === 'data-lesson_completed') {
-          active = null
-        } else if (part.type === 'data-lesson_declined') {
-          if (pending?.id === part.data.lesson_id) pending = null
-        }
+  /**
+   * The canvas panel drive: the latest `panel_shown` that has not been hidden
+   * by the tutor (panel_hidden) nor folded away by the user (dismissed).
+   */
+  const activePanel: PanelInstance | null = React.useMemo(() => {
+    let current: PanelInstance | null = null
+    for (const { part } of entries) {
+      if (part.type === 'data-panel_shown') {
+        current = cleanEscapedText(part.data.panel)
+      } else if (part.type === 'data-panel_hidden' && current) {
+        // The tutor's hide targets whatever is showing: an empty or matching id.
+        const hiddenId = part.data.panel_id
+        if (!hiddenId || hiddenId === current.id) current = null
       }
     }
-    return { activeLesson: active, pendingProposal: pending }
-  }, [messages])
+    return current && !dismissedPanelIds.has(current.id) ? current : null
+  }, [entries, dismissedPanelIds])
 
-  const phaseLine = pendingProposal
-    ? 'Lesson proposed — check the card'
-    : activeLesson
-      ? `Lesson: ${activeLesson.spec.title}`
-      : 'Practice speaking with your conversation partner.'
+  /** Renderable node for one walked part; null skips it (empty/absorbed parts). */
+  function renderEntry(
+    entry: (typeof entries)[number],
+    context: 'main' | 'canvas',
+  ): React.ReactNode {
+    const { part, message, messageIndex, partIndex } = entry
+    if (part.type === 'text') {
+      const text = part.text
+      if (!text.trim()) return null
+      const isUser = message.role === 'user'
+      return (
+        <React.Fragment key={`${messageIndex}-${partIndex}`}>
+          <Bubble variant={isUser ? 'default' : 'muted'} align={isUser ? 'end' : 'start'}>
+            <BubbleContent>{isUser ? text : <Markdown>{text}</Markdown>}</BubbleContent>
+          </Bubble>
+          {!isUser && (
+            <div className="flex w-full items-center gap-1 px-1 opacity-40 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button variant="ghost" size="icon-xs" onClick={() => handleTranslate(text)}>
+                      <LanguagesIcon />
+                    </Button>
+                  }
+                />
+                <TooltipContent>Translate</TooltipContent>
+              </Tooltip>
+              {speakingId === message.id ? (
+                <Tooltip>
+                  <TooltipTrigger render={<Button variant="ghost" size="icon-xs" onClick={stop} />}>
+                    <SquareIcon />
+                  </TooltipTrigger>
+                  <TooltipContent>Stop speaking</TooltipContent>
+                </Tooltip>
+              ) : (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={() => void speak(message.id, text, targetLanguage)}
+                      >
+                        <Volume2Icon />
+                      </Button>
+                    }
+                  />
+                  <TooltipContent>Replay speech</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+          )}
+        </React.Fragment>
+      )
+    }
+    if (part.type === 'data-panel_shown') {
+      if (context === 'canvas') return null // the canvas shows the active panel
+      const panel = cleanEscapedText(part.data.panel)
+      if (activePanel?.id === panel.id) return null // currently on the canvas
+      return (
+        <PanelRecord
+          key={`panel-${messageIndex}-${partIndex}`}
+          panel={panel}
+        />
+      )
+    }
+    if (part.type === 'data-panel_hidden') return null // absorbed by the walk
+    // `data-status` parts render via the chip.
+    return null
+  }
 
   /** Reuse or lazily create the session the conversation belongs to. Event-time only. */
   async function activeSessionId(): Promise<string> {
@@ -300,7 +325,7 @@ function ChatView({
 
   function dataPartMessage(
     id: string,
-    kind: 'proposal_ready' | 'lesson_started' | 'lesson_completed' | 'lesson_declined',
+    kind: 'panel_shown' | 'panel_hidden',
     data: unknown,
   ): VocaUIMessage {
     return {
@@ -312,8 +337,8 @@ function ChatView({
 
   // Continue an open session (History's Continue button links /?session=<id>): the
   // ONLY restore path — nothing auto-resumes on load or toggle. Verifies ownership
-  // and open status under RLS, and replays the transcript (including lesson event
-  // rows) so the conversation and its lesson state continue seamlessly.
+  // and open status under RLS, and replays the transcript (including panel event
+  // rows) so the conversation and its canvas continue seamlessly.
   React.useEffect(() => {
     if (!continueSessionId) return
     let cancelled = false
@@ -321,7 +346,7 @@ function ChatView({
       try {
         const { data: sessionRow } = await supabase
           .from('sessions')
-          .select('id, status, lessons')
+          .select('id, status')
           .eq('id', continueSessionId)
           .maybeSingle()
         if (cancelled) return
@@ -340,25 +365,14 @@ function ChatView({
           .order('created_at')
 
         if (cancelled) return
-        // Lesson state replays from the persisted payload rows (below) — the
-        // derived-state effect walks the messages, as it does for live streams.
         sessionIdRef.current = sessionRow.id
         setSessionId(sessionRow.id)
         const restored: VocaUIMessage[] = []
         for (const [index, line] of (transcript ?? []).entries()) {
           const payload = (line as { payload?: { kind?: string; data?: unknown } }).payload
           if (payload?.kind) {
-            if (
-              payload.kind === 'proposal_ready' ||
-              payload.kind === 'lesson_started' ||
-              payload.kind === 'lesson_completed' ||
-              payload.kind === 'lesson_declined'
-            ) {
-              // Decode escape sequences older stored rows may carry (see
-              // cleanEscapedText) so restored lessons render their line breaks.
-              const data = cleanEscapedText(payload.data) as
-                | { lesson: LessonInstance }
-                | undefined
+            if (payload.kind === 'panel_shown' || payload.kind === 'panel_hidden') {
+              const data = cleanEscapedText(payload.data)
               restored.push(dataPartMessage(`restored-${payload.kind}-${index}`, payload.kind, data))
             }
             continue
@@ -370,6 +384,7 @@ function ChatView({
           })
         }
         setMessages(restored)
+        setDismissedPanelIds(new Set()) // the replayed canvas re-opens
         const last = restored[restored.length - 1]
         lastSpokenRef.current = last?.id ?? null // do not re-speak restored history
         // Clean the URL so reloads start fresh instead of re-entering this flow.
@@ -416,126 +431,6 @@ function ChatView({
     }
   }
 
-  /** Accept the pending proposal: POST accept and stream the opener into the chat. */
-  async function acceptLesson() {
-    const lesson = pendingProposal
-    if (!lesson || !sessionIdRef.current || acceptingLessonId) return
-    setAcceptingLessonId(lesson.id)
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      if (!session?.access_token) {
-        throw new Error('Your session has expired. Please sign in again.')
-      }
-      const response = await fetch(`${BACKEND_URL}/sessions/lessons/accept`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ session_id: sessionIdRef.current }),
-      })
-      if (!response.ok || !response.body) throw new Error('Failed to start the lesson')
-
-      const openerId = crypto.randomUUID()
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      const upsertOpener = (ensure: boolean, text = '') => {
-        setMessages((prev) => {
-          const last = prev[prev.length - 1]
-          if (last?.id === openerId) {
-            const textPart =
-              last.parts.find((part) => part.type === 'text') ?? ({ type: 'text', text: '' } as const)
-            return [
-              ...prev.slice(0, -1),
-              {
-                ...last,
-                parts: [
-                  ...last.parts.filter((part) => part.type !== 'text'),
-                  { type: 'text' as const, text: (textPart as { text: string }).text + text },
-                ],
-              },
-            ]
-          }
-          const initial: VocaUIMessage = {
-            id: openerId,
-            role: 'assistant',
-            parts: [
-              {
-                type: 'data-lesson_started',
-                id: `data-${openerId}`,
-                data: { lesson },
-              } as VocaUIMessage['parts'][number],
-              { type: 'text' as const, text: text },
-            ],
-          }
-          return [...prev, initial]
-        })
-      }
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        let boundary = buffer.indexOf('\n\n')
-        while (boundary !== -1) {
-          const frame = buffer.slice(0, boundary)
-          buffer = buffer.slice(boundary + 2)
-          boundary = buffer.indexOf('\n\n')
-          const line = frame.split('\n').find((l) => l.startsWith('data:'))
-          if (!line) continue
-          try {
-            const event = JSON.parse(line.slice('data:'.length))
-            if (event.type === 'event' && event.kind === 'lesson_started') {
-              upsertOpener(true)
-            } else if (event.type === 'delta' && typeof event.text === 'string') {
-              upsertOpener(false, event.text)
-            }
-            // `status`/`error`/`done` frames: ignore (accept errors toast on !ok).
-          } catch {
-            // Non-JSON SSE frame.
-          }
-        }
-      }
-    } catch (error) {
-      toast({
-        title: 'Could not start the lesson',
-        description: error instanceof Error ? error.message : 'Failed to start the lesson',
-        type: 'error',
-      })
-    } finally {
-      setAcceptingLessonId(null)
-    }
-  }
-
-  async function declineLesson() {
-    const lesson = pendingProposal
-    if (!lesson || !sessionIdRef.current) return
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      const response = await fetch(`${BACKEND_URL}/sessions/lessons/decline`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${session?.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ session_id: sessionIdRef.current }),
-      })
-      if (!response.ok) throw new Error('Failed to decline')
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: error instanceof Error ? error.message : 'Failed to decline',
-        type: 'error',
-      })
-    }
-  }
-
   // Speak each tutor reply once it has finished streaming.
   React.useEffect(() => {
     if (muted || status !== 'ready') return
@@ -578,6 +473,7 @@ function ChatView({
     sessionIdRef.current = null
     lastSpokenRef.current = null
     setMessages([])
+    setDismissedPanelIds(new Set())
   }
 
   async function endSession() {
@@ -595,6 +491,7 @@ function ChatView({
       setSessionId(null)
       setMessages([])
       setInput('')
+      setDismissedPanelIds(new Set())
       const {
         data: { session },
       } = await supabase.auth.getSession()
@@ -625,129 +522,16 @@ function ChatView({
     }
   }
 
-  /** Renderable nodes for one walked entry; null skips it. */
-  function renderEntry(
-    entry: (typeof entries)[number],
-    context: 'main' | 'lesson',
-  ): React.ReactNode {
-    const { part, message } = entry
-    if (part.type === 'text') {
-      const text = part.text
-      if (!text.trim()) return null
-      const isUser = message.role === 'user'
-      return (
-        <React.Fragment key={`${entry.messageIndex}-${entry.partIndex}`}>
-          <Bubble variant={isUser ? 'default' : 'muted'} align={isUser ? 'end' : 'start'}>
-            <BubbleContent>{isUser ? text : <Markdown>{text}</Markdown>}</BubbleContent>
-          </Bubble>
-          {!isUser && (
-            <div className="flex w-full items-center gap-1 px-1 opacity-40 transition-opacity group-hover/message:opacity-100 focus-within:opacity-100">
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button variant="ghost" size="icon-xs" onClick={() => handleTranslate(text)}>
-                      <LanguagesIcon />
-                    </Button>
-                  }
-                />
-                <TooltipContent>Translate</TooltipContent>
-              </Tooltip>
-              {speakingId === message.id ? (
-                <Tooltip>
-                  <TooltipTrigger render={<Button variant="ghost" size="icon-xs" onClick={stop} />}>
-                    <SquareIcon />
-                  </TooltipTrigger>
-                  <TooltipContent>Stop speaking</TooltipContent>
-                </Tooltip>
-              ) : (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => void speak(message.id, text, targetLanguage)}
-                      >
-                        <Volume2Icon />
-                      </Button>
-                    }
-                  />
-                  <TooltipContent>Replay speech</TooltipContent>
-                </Tooltip>
-              )}
-            </div>
-          )}
-        </React.Fragment>
-      )
-    }
-    if (part.type === 'data-proposal_ready') {
-      if (context !== 'main') return null
-      const lesson = part.data.lesson
-      if (lesson.id !== pendingProposal?.id) return null // answered historical proposal
-      return (
-        <ProposalCard
-          key={`proposal-${lesson.id}`}
-          lesson={lesson}
-          onAccept={acceptLesson}
-          onDecline={declineLesson}
-          busy={acceptingLessonId === lesson.id}
-        />
-      )
-    }
-    if (part.type === 'data-lesson_started') {
-      if (context !== 'main') return null // the dock holds the lesson while active
-      const record = lessonTimeline.get(part.data.lesson.id)
-      if (!record) return null
-      return (
-        <LessonThreadBlock
-          key={`lesson-block-${record.lesson.id}`}
-          lesson={record.lesson}
-          completed={record.completed}
-          record={recordNodes(record.lesson.id)}
-        />
-      )
-    }
-    if (part.type === 'data-lesson_completed') return null // lives inside the block
-    // `data-status` parts render via the chip.
-    return null
-  }
-
-  /** The chat that happened inside a lesson — read-only, shown in its block. */
-  function recordNodes(lessonId: string): React.ReactNode[] {
-    const isText = (entry: (typeof entries)[number]) =>
-      entry.lessonId === lessonId && entry.part.type === 'text' && (entry.part as { text: string }).text.trim()
-    return entries
-      .filter(isText)
-      .map((entry, index) => {
-        const text = (entry.part as { text: string }).text
-        return (
-          <Bubble
-            key={`record-${lessonId}-${entry.messageIndex}-${index}`}
-            variant={entry.message.role === 'user' ? 'default' : 'muted'}
-            align={entry.message.role === 'user' ? 'end' : 'start'}
-          >
-            <BubbleContent>
-              {entry.message.role === 'user' ? text : <Markdown>{text}</Markdown>}
-            </BubbleContent>
-          </Bubble>
-        )
-      })
-  }
-
   return (
     <div className="relative flex h-full w-full flex-col">
       <div className="flex items-start justify-between gap-4 px-8 pt-6 pb-4">
         <div className="flex flex-col gap-1">
-          <div className="font-medium">
-            {languageName(targetLanguage)} Session
-            {activeLesson ? (
-              <span className="text-muted-foreground">
-                {' '}
-                · {lessonTemplateName(activeLesson.spec.template)}
-              </span>
-            ) : null}
+          <div className="font-medium">{languageName(targetLanguage)} Session</div>
+          <div className="text-sm text-muted-foreground">
+            {activePanel
+              ? 'Your tutor put something on the panel →'
+              : 'Practice speaking with your conversation partner.'}
           </div>
-          <div className="text-sm text-muted-foreground">{phaseLine}</div>
         </div>
         <div className="flex items-center gap-1">
           <Tooltip>
@@ -774,16 +558,15 @@ function ChatView({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col px-8">
-        {activeLesson ? (
+        {activePanel ? (
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_400px]">
-            <LessonColumn
-              entries={entries.filter(
-                (entry) =>
-                  entry.lessonId === activeLesson.id && !(entry.part.type === 'data-lesson_started'),
-              )}
-              status={status}
+            <MessageThread entries={entries} status={status} />
+            <PanelCanvas
+              panel={activePanel}
+              onClose={() =>
+                setDismissedPanelIds((prev) => new Set([...prev, activePanel.id]))
+              }
             />
-            <LessonPanel lesson={activeLesson} />
           </div>
         ) : messages.length === 0 ? (
           <Empty className="flex-1">
@@ -793,21 +576,13 @@ function ChatView({
               </EmptyMedia>
               <EmptyTitle>Ready to practice?</EmptyTitle>
               <EmptyDescription>
-                Start a conversation in {languageName(targetLanguage)} — chat casually, and Voca
-                will offer a structured lesson when the time feels right.
+                Start a conversation in {languageName(targetLanguage)} — chat casually, and your
+                tutor will put menus, scripts, or exercises on the side panel whenever they help.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : (
-          <MessageThread
-            entries={entries.filter(
-              (entry) =>
-                entry.part.type === 'data-lesson_started' ? true : entry.lessonId === null,
-            )}
-            status={status}
-            pendingProposalId={pendingProposal?.id}
-            acceptingLessonId={acceptingLessonId}
-          />
+          <MessageThread entries={entries} status={status} />
         )}
       </div>
 
@@ -883,15 +658,7 @@ function ChatView({
     </div>
   )
 
-  function MessageThread({
-    entries: threadEntries,
-    ...rest
-  }: {
-    entries: typeof entries
-    status: ChatStatus
-    pendingProposalId?: string
-    acceptingLessonId: string | null
-  }) {
+  function MessageThread({ entries: threadEntries, status }: { entries: typeof entries; status: ChatStatus }) {
     // Group walked entries per message so every bubble keeps its avatar/header.
     const groups = [] as { message: VocaUIMessage; parts: typeof threadEntries }[]
     for (const entry of threadEntries) {
@@ -921,7 +688,7 @@ function ChatView({
         )
       })
       .filter(Boolean)
-    const chip = streamingStatusChip(threadEntries as ChipEntry[], rest.status)
+    const chip = streamingStatusChip(threadEntries as unknown as ChipEntry[], status)
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <MessageScrollerProvider autoScroll>
@@ -952,104 +719,11 @@ function ChatView({
       </div>
     )
   }
-
-  /** The left column of the split view: chat messages from within the lesson. */
-  function LessonColumn({
-    entries: lessonEntries,
-    status: chatStatus,
-  }: {
-    entries: typeof entries
-    status: ChatStatus
-  }) {
-    const items = lessonEntries.map((entry) => {
-      const nodes = renderEntry(entry, 'lesson')
-      if (nodes === null) return null
-      return (
-        <MessageScrollerItem
-          key={`lesson-${entry.messageIndex}-${entry.partIndex}`}
-          messageId={`lp${entry.messageIndex}-p${entry.partIndex}`}
-        >
-          <Message align={entry.message.role === 'user' ? 'end' : 'start'}>
-            {entry.message.role !== 'user' && <MessageAvatar>{TUTOR_AVATAR}</MessageAvatar>}
-            <MessageContent>
-              {entry.message.role !== 'user' && <MessageHeader>Voca</MessageHeader>}
-              <div className="flex flex-col items-start gap-2">{nodes}</div>
-            </MessageContent>
-          </Message>
-        </MessageScrollerItem>
-      )
-    })
-    const visible = items.filter(Boolean)
-    const chip =
-      (chatStatus === 'submitted' || chatStatus === 'streaming') && visible.length === 0
-        ? 'Thinking…'
-        : null
-    return (
-      <div className="flex min-h-0 flex-col">
-        <MessageScrollerProvider autoScroll>
-          <MessageScroller>
-            <MessageScrollerViewport>
-              <MessageScrollerContent className="gap-4 py-2">
-                {visible.length === 0 && chip === null ? (
-                  <div className="text-muted-foreground py-6 text-center text-sm">
-                    The lesson&apos;s conversation starts here.
-                  </div>
-                ) : null}
-                {visible}
-                {chip !== null && (
-                  <MessageScrollerItem messageId="thinking-lesson">
-                    <Message align="start">
-                      <MessageAvatar>{TUTOR_AVATAR}</MessageAvatar>
-                      <MessageContent>
-                        <MessageHeader>Voca</MessageHeader>
-                        <Bubble variant="muted" align="start">
-                          <BubbleContent>
-                            <span className="shimmer">{chip}</span>
-                          </BubbleContent>
-                        </Bubble>
-                      </MessageContent>
-                    </Message>
-                  </MessageScrollerItem>
-                )}
-              </MessageScrollerContent>
-            </MessageScrollerViewport>
-            <MessageScrollerButton />
-          </MessageScroller>
-        </MessageScrollerProvider>
-      </div>
-    )
-  }
 }
 
-/** The right panel of the split view: the active lesson's material. */
-function LessonPanel({ lesson }: { lesson: LessonInstance }) {
-  const spec = lesson.spec
-  return (
-    <div className="flex max-h-full min-h-0 flex-col rounded-xl border border-primary/30 bg-card shadow-sm md:order-last">
-      <div className="flex items-center gap-2 border-b border-primary/20 px-4 pt-3 pb-2">
-        <span className="relative flex size-2" aria-hidden>
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60" />
-          <span className="relative inline-flex size-2 rounded-full bg-primary" />
-        </span>
-        <span className="text-xs font-medium tracking-wide uppercase text-muted-foreground">
-          Lesson in progress · {lessonTemplateName(spec.template)}
-          {spec.minutes ? ` · ~${spec.minutes} min` : ''}
-        </span>
-      </div>
-      <div className="flex-1 overflow-y-auto px-4 py-3">
-        <h3 className="text-sm font-medium mb-2">{spec.title}</h3>
-        <div className="space-y-2">
-          <MaterialBlocksList blocks={lesson.material} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-
-/** Waiting chip for a walked entry stream (submitted + pre-text streaming). */
 type ChipEntry = { part: { type: string; text?: string; data?: { text?: string } } }
 
+/** Waiting chip for the stream (submitted + pre-text streaming). */
 function streamingStatusChip(threadEntries: ChipEntry[], chatStatus: ChatStatus): string | null {
   const waiting = chatStatus === 'submitted' || chatStatus === 'streaming'
   if (!waiting) return null

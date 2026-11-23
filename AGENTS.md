@@ -1,12 +1,12 @@
 # Voca — agent guide
 
-AI-powered language learning app (interface English; target language selectable, Spanish only today): conversational tutor (streaming chat + TTS) running a small-talk ⇄ lesson loop, SRS review cards (FSRS), session planning/recap agents on top of Postgres via Supabase.
+AI-powered language learning app (interface English; target language selectable, Spanish only today): one continuous tutor conversation (streaming chat + TTS) with a canvas panel the tutor drives via a tool, SRS review cards (FSRS), a session-end analyst, Postgres via Supabase.
 
 ## Stack
 
-- **Backend** `src/voca/` — Python 3.14, FastAPI + `pydantic-ai`, served by uvicorn. LLM runs on **Ollama** (OpenAI-compat API); one model lane: every agent — the streaming tutor included — is `gemma4:31b-cloud` via `LLM_MODEL` (cloud: needs `ollama signin`). Sessions are a stateful loop (`small_talk ⇄ awaiting_accept ⇄ lesson`) derived from `sessions.lessons` in `services/lesson_flow.py`: the tutor chats, then formally proposes a lesson (`propose_lesson` tool → planner agent grounded in the small-talk transcript), on acceptance teaches its typed material blocks (`services/lesson_material.py`: scenario/text/dialogue/questions/tasks/word_bank), and closes it with `complete_lesson` (per-lesson FSRS credit via the `lesson_grader_agent`; the session-end analyst sweeps anything not covered by a lesson). `/chat` streams SSE frames `{type: "delta"|"status"|"event", ...}` — tool events (proposal cards, material, summaries) are typed data parts on the frontend and persist in `transcripts.payload` for restore. Target language lives in `profiles.target_language`; supported languages map in `services/languages.py`. TTS `POST /v1/audio/speech` → WAV, model/voice resolved per language (today `phonon:40m-es` / "Alicia").
+- **Backend** `src/voca/` — Python 3.14, FastAPI + `pydantic-ai`, served by uvicorn. LLM runs on **Ollama** (OpenAI-compat API); one model lane: every agent — the streaming tutor included — is `gemma4:31b-cloud` via `LLM_MODEL` (cloud: needs `ollama signin`). One conversation per session, no phase machine: the tutor converses and calls `show_panel`/`hide_panel` (`agents/tutor_agent.py`) whenever structured content helps — the UI pops a canvas panel on the right (split view). Panel content is the typed block primitives in `services/panel_content.py` (scenario/text/dialogue/questions/tasks/word_bank), normalized/validated defensively. `/chat` streams SSE frames `{type: "delta"|"status"|"event", ...}` — panel events are typed data parts on the frontend and persist in `transcripts.payload` for restore (panel state replays from payload rows, not a session column). At session end the analyst (`agents/post_session_agent.py`) applies the FSRS rubric (recall woven into the outcome definitions; `services/srs.py` `VOCA_RATING_MAP`), harvests new cards, and writes the recap. Target language lives in `profiles.target_language`; supported languages map in `services/languages.py`. TTS `POST /v1/audio/speech` → WAV, model/voice resolved per language (today `phonon:40m-es` / "Alicia").
 - **Frontend** `frontend/` — Next.js 16 (App Router), Tailwind v4, shadcn **base-nova** style on **Base UI** (`@base-ui/react`, *not* Radix; `toast` from `ui/toast`, `cn` from the `cn` package). Components come from the shadcn CLI — never hand-roll a `components/ui/` primitive. Next 16 differs from older knowledge: read the warning in `frontend/AGENTS.md` and its docs under `frontend/node_modules/next/dist/docs/` before writing Next code.
-- **DB/Auth** — Supabase, run locally (`supabase/` migrations). Postgres tables: `profiles` (+`target_language`), `sessions` (+`lessons` JSONB, `recap`), `transcripts` (+`payload`), `cards` (FSRS state in `fsrs_data`, `next_review`), `card_reviews` (+`lesson_id`). There is no lessons table: lessons are instantiated on the fly from the template catalog in `services/lesson_templates.py` and stored in `sessions.lessons`. Backend uses the service-role key; the browser uses the anon key with RLS.
+- **DB/Auth** — Supabase, run locally (`supabase/` migrations). Postgres tables: `profiles` (+`target_language`), `sessions` (+`recap`), `transcripts` (+`payload` — panel events replay from here), `cards` (FSRS state in `fsrs_data`, `next_review`), `card_reviews`. Backend uses the service-role key; the browser uses the anon key with RLS.
 - **SRS** — `services/srs.py` wraps the `fsrs` package (`Scheduler.review_card(card, rating, when) -> (Card, ReviewLog)`); rating map in `VOCA_RATING_MAP`.
 
 ## Commands (Taskfile, run with `uv run task <name>`)
@@ -28,17 +28,18 @@ Env: `src/voca/.env` (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `LLM_BASE_URL
 
 ```
 src/voca/
-  main.py            # FastAPI app: /health, /chat (SSE), /sessions/*, /sessions/lessons/accept|decline, /translate, /ollama/health
-  agents/            # pydantic-ai agents: tutor_agent (chat + lesson tools), session_planner_agent (LessonProposal),
-                     # lesson_grader_agent (per-lesson FSRS credit), post_session_agent (/sessions/end sweep)
-  services/          # llm.py (one model lane), lesson_flow.py (session state machine), lesson_material.py (typed blocks),
-                     # languages.py, lesson_templates.py, srs.py, supabase_client.py
+  main.py            # FastAPI app: /health, /chat (SSE), /sessions/*, /translate, /ollama/health
+  agents/            # pydantic-ai agents: tutor_agent (chat + show_panel/hide_panel tools),
+                     # post_session_agent (/sessions/end: FSRS rubric, new cards, recap)
+  services/          # llm.py (one model lane), panel_content.py (typed panel blocks),
+                     # languages.py, srs.py, supabase_client.py
 frontend/
-  app/page.tsx       # chat (the main page): small talk ⇄ lesson loop; proposal/material/summary data parts;
-                     # app/api/chat/route.ts proxies /chat into AI-SDK data parts; app/api/tts/route.ts (voice)
-  components/lesson/ # proposal card, material blocks (per-type rendering), lesson summary
+  app/page.tsx       # chat (the main page): one conversation + canvas (split view while a panel
+                     # shows; collapsed panel records in the thread); app/api/chat/route.ts proxies
+                     # /chat into AI-SDK data parts; app/api/tts/route.ts (voice)
+  components/panel/  # panel canvas (split view), panel records, block rendering per type
   components/ui/     # shadcn base-nova primitives (Base UI); chat primitives: message, bubble, message-scroller
-  lib/               # lesson-events.ts (typed stream payloads), lesson-templates.ts (template names),
+  lib/               # panel-events.ts (typed stream payloads + panel types),
                      # languages.ts (language map + TTS per language), api.ts, supabase.ts, use-speech.ts
 supabase/migrations/ # schema; tests/  # pytest suite (offline by default)
 frontend/tests/      # Vitest + RTL suite (offline: supabase + backend fetch mocked in

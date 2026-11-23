@@ -1,26 +1,18 @@
 """Live-LLM integration tests — opt-in only (needs the Ollama server + gemma4:31b-cloud).
 
 Excluded from the default run via `-m "not integration"` (see pyproject).
-Run with: `uv run task test:all`. Every agent now shares one model lane
-(`gemma4:31b-cloud`): these tests pin down schema adherence, tool-call behavior,
-and the lesson-material contracts end-to-end.
+Run with: `uv run task test:all`. Every agent shares one model lane
+(`gemma4:31b-cloud`): these tests pin down schema adherence, tool-call behavior
+(the tutor's `show_panel` canvas calls), and the FSRS rubric end-to-end.
 """
 
 import asyncio
 
 import pytest
 
-from voca.agents.lesson_grader_agent import GraderDeps, LessonGrades, lesson_grader_agent
-from voca.agents.post_session_agent import PostSessionResult, post_session_agent
-from voca.agents.session_planner_agent import LessonProposal, session_planner_agent
+from voca.agents.post_session_agent import PostSessionDeps, PostSessionResult, post_session_agent
 from voca.agents.tutor_agent import TutorDeps, tutor_agent
-from voca.services import lesson_flow
-from voca.services.lesson_flow import PRODUCTION_OUTCOMES, LessonSpec, new_lesson
-from voca.services.lesson_templates import LESSON_TEMPLATES
 
-TEMPLATE_IDS = {template["id"] for template in LESSON_TEMPLATES}
-
-# All known material primitives (the union the schema enforces).
 ALL_BLOCK_TYPES = {"scenario", "text", "dialogue", "questions", "tasks", "word_bank"}
 
 
@@ -34,20 +26,19 @@ def tutor_deps(**overrides) -> TutorDeps:
             "level": "A2",
             "interests": "architecture",
         },
-        "phase": lesson_flow.PHASE_SMALL_TALK,
-        "active_lesson": None,
-        "pending_proposal": None,
-        "session_lessons": [],
         "due_cards": [],
-        "smalltalk_turns": 5,
         "events": asyncio.Queue(),
-        "run_planner": None,
-        "activate_proposal": None,
-        "grade_and_complete": None,
         "record_event": None,
     }
     base.update(overrides)
     return base
+
+
+async def drained(queue: asyncio.Queue) -> list[dict]:
+    items: list[dict] = []
+    while not queue.empty():
+        items.append(queue.get_nowait())
+    return items
 
 
 @pytest.mark.integration
@@ -63,204 +54,98 @@ async def test_tutor_replies_in_spanish():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_tutor_calls_propose_lesson_after_nudge():
-    """The nudge drives the tutor to a real tool call with a grounded idea."""
-    calls: list[str] = []
-    planned: list[dict] = []
-    proposal = new_lesson(
-        LessonSpec(
-            template="role_play",
-            title="A café in Madrid",
-            objectives=["order politely"],
-            minutes=6,
-        ),
-        [
-            {
-                "type": "scenario",
-                "setting": "a café",
-                "learner_role": "customer",
-                "tutor_role": "barista",
-                "goal": "order a coffee",
-            }
-        ],
-        [{"id": "card-1", "front": "quisiera", "back": "I would like"}],
-        "the learner chatted about coffee",
-        "¡Hola! Imagina que entramos en una cafetería.",
-    )
+async def test_tutor_shows_menu_panel_when_role_playing_a_restaurant():
+    """A menu request drives the real show_panel tool: a panel_shown event.
 
-    async def run_planner(idea: str):
-        calls.append(idea)
-        return proposal
+    The model's tool-calling is stochastic, so the prompt retries once with a
+    blunter ask if the first turn produced no panel.
+    """
+    async def record_event(kind, data):
+        pass
+
+    deps = tutor_deps(record_event=record_event)
+    prompts = [
+        "Estoy sentado en un restaurante mexicano y me has dado la carta. "
+        "Enséñamela, por favor.",
+        "Muéstrame la carta en el panel, por favor.",
+    ]
+    for prompt in prompts:
+        await tutor_agent.run(prompt, deps=deps)
+    # Status chips may queue; the assert is on typed events only.
+    events = await drained(deps["events"])
+    panels = [
+        event
+        for event in events
+        if event.get("type") == "event" and event.get("kind") == "panel_shown"
+    ]
+    assert panels, "the tutor must call show_panel for a menu request"
+    panel = panels[0]["data"]["panel"]
+    assert panel["title"].strip()
+    assert panel["blocks"], "the panel carries at least one content block"
+    for block in panel["blocks"]:
+        assert block["type"] in ALL_BLOCK_TYPES
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_tutor_small_talk_stays_panel_free():
+    """Casual chat without a content need must not stack a panel."""
 
     async def record_event(kind, data):
-        planned.append(kind)
+        pass
 
-    deps = tutor_deps(
-        due_cards=[{"id": "card-1", "front": "quisiera", "back": "I would like"}],
-        run_planner=run_planner,
-        record_event=record_event,
-    )
+    deps = tutor_deps(record_event=record_event)
     await tutor_agent.run(
-        "Hola, estoy bien. Ay desayuné en una cafetería nueva cerca de casa.",
+        "Hola, ¿qué tal? Hoy fue un día larguísimo en el trabajo, pero bien.",
         deps=deps,
     )
-    assert calls, "the tutor must call propose_lesson at the nudge"
-    assert planned == ["proposal_ready"]
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_session_planner_produces_valid_proposal():
-    """Schema-valid proposal: template blocks valid for the template, cards by ID."""
-    deps = {
-        "user_id": "user-1",
-        "user_profile": {
-            "target_language": "es",
-            "goals": "travel to Mexico",
-            "level": "A2",
-            "interests": "cooking",
-        },
-        "due_cards": [
-            {"id": "card-1", "front": "exhausted", "back": "agotado"},
-            {"id": "card-2", "front": "the bill / check", "back": "la cuenta"},
-            {"id": "card-3", "front": "I would like…", "back": "quisiera…"},
-            {"id": "card-4", "front": "spicy", "back": "picante"},
-        ],
-        "recent_transcript": [
-            {"speaker": "user", "text": "Anoche fui a un restaurante mexicano y pedí tacos."},
-            {"speaker": "tutor", "text": "¡Qué bien! ¿Te gustó la comida?"},
-        ],
-        "session_lessons": [],
-    }
-    result = await session_planner_agent.run("Design this lesson proposal.", deps=deps)  # type: ignore[arg-type]
-    assert isinstance(result.output, LessonProposal)
-    proposal = result.output
-    assert proposal.lesson.template in TEMPLATE_IDS
-    assert proposal.lesson.title.strip()
-    assert proposal.lesson.objectives, "2-4 objectives required"
-    assert proposal.intro_line.strip()
-    assert proposal.reason.strip()
-
-    material_type_count = {}
-    for block in proposal.material:
-        material_type_count[block.type] = material_type_count.get(block.type, 0) + 1
-    template = next(t for t in LESSON_TEMPLATES if t["id"] == proposal.lesson.template)
-    assert all(block.type in ALL_BLOCK_TYPES for block in proposal.material), (
-        "material may only contain known primitives (disallowed extras are dropped)"
-    )
-    for block_type in template["required_blocks"]:
-        assert material_type_count.get(block_type), (
-            f"template {template['id']} requires a {block_type} block"
-        )
-
-    valid_ids = {card["id"] for card in deps["due_cards"]}
-    assert proposal.target_card_ids, "planner should select at least one card"
-    assert set(proposal.target_card_ids) <= valid_ids
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_lesson_grader_produces_valid_grades():
-    """The grader grades only/any subset of target cards with evidence-backed outcomes."""
-    lesson = new_lesson(
-        LessonSpec(
-            template="role_play",
-            title="A café in Madrid",
-            objectives=["order politely", "ask for the check"],
-            minutes=6,
-        ),
-        [
-            {
-                "type": "scenario",
-                "setting": "a café",
-                "learner_role": "customer",
-                "tutor_role": "barista",
-                "goal": "order a coffee and pay",
-            }
-        ],
-        [
-            {"id": "card-1", "front": "quisiera", "back": "I would like"},
-            {"id": "card-2", "front": "la cuenta", "back": "the bill / check"},
-        ],
-        "the learner chatted about coffee",
-        "¡Hola! Imagina que entramos en una cafetería.",
-    )
-    lesson["status"] = "active"
-    lesson["accepted_at"] = "2025-01-01T00:00:10+00:00"
-    deps = GraderDeps(
-        language="es",
-        lesson=lesson,
-        transcript=[
-            {
-                "speaker": "tutor",
-                "text": "¡Hola! Imagina que entramos en una cafetería. ¿La carta?",
-            },
-            {"speaker": "user", "text": "Quisiera un cortado, por favor."},
-            {"speaker": "tutor", "text": "Perfecto, aquí tienes. ¿Algo más?"},
-            {"speaker": "user", "text": "No, nada más. ¿Me trae la cuenta, por favor?"},
-            {"speaker": "tutor", "text": "Claro, ahora mismo. ¡Todo muy bien pedido!"},
-        ],
-    )
-    result = await lesson_grader_agent.run("Grade this lesson.", deps=deps)
-    assert isinstance(result.output, LessonGrades)
-    valid_ids = {"card-1", "card-2"}
-    graded_ids = {grade.card_id for grade in result.output.grades}
-    assert graded_ids, "the grader must credit exercised cards"
-    assert graded_ids <= valid_ids, "grades reference target cards only"
-    for grade in result.output.grades:
-        assert grade.evidence.strip()
-    # This transcript clearly exercises both targets; most grades must land.
-    assert len(graded_ids) >= 1
-    # The learner produced both target phrases correctly in context — production
-    # credit (the bonus) should dominate on this transcript, but the judge samples.
-    production = [g for g in result.output.grades if g.outcome in PRODUCTION_OUTCOMES]
-    assert len(production) >= 1, "at least one in-context production must earn the bonus"
-    assert result.output.summary.headline.strip()
-    assert isinstance(result.output.bonus_uses, list)
+    events = await drained(deps["events"])
+    panels = [event for event in events if event.get("kind") == "panel_shown"]
+    assert panels == [], "small talk needs no panel"
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_post_session_produces_valid_analysis():
-    """Schema-valid post-session output: card grades by ID, typed profile updates."""
-    lesson = new_lesson(
-        LessonSpec(template="role_play", title="Ordering at a taquería"),
-        [],
-        [{"id": "card-2", "front": "the bill / check", "back": "la cuenta"}],
-        "the learner chatted about tacos",
-        "Vamos a la taquería.",
-    )
-    lesson["status"] = "completed"
-    lesson["grades"] = [{"card_id": "card-2", "outcome": "pass", "bonus_use": True}]
-    deps = {
+    """Schema-valid post-session output: FSRS rubric grades by ID, typed updates."""
+    deps: PostSessionDeps = {
         "user_id": "user-1",
         "session_id": "session-1",
         "target_language": "es",
-        "lessons": [lesson],
         "transcript": [
-            {"speaker": "tutor", "text": "¡Hola! Que gusto verte. ¿Listo para la taquería?"},
-            {"speaker": "user", "text": "Hola! Sí. Quisiero un tacos de pastor, por favor."},
+            {"speaker": "tutor", "text": "¡Hola! Dime, ¿qué se te antoja hoy?"},
+            {"speaker": "user", "text": "Quisiero un tacos de pastor, por favor."},
             {
                 "speaker": "tutor",
-                "text": "Casi perfecto: decimos 'quisiera unos tacos'. ¿Algo de tomar?",
+                "text": "Casi perfecto: decimos 'quisiera unos tacos'. ¿Ya conoces 'la cuenta'?",
             },
-            {"speaker": "user", "text": "Sí, un agua de horchata. ¿Cuánto cuesta todo?"},
-            {
-                "speaker": "tutor",
-                "text": "Muy bien preguntado. '¿Cuánto cuesta todo?' es perfecto.",
-            },
+            {"speaker": "user", "text": "¿La cuenta? No sé. ¿Qué es?"},
+            {"speaker": "tutor", "text": "Es el billete o ticket cuando terminas de comer."},
         ],
-        # card-2 was graded by the lesson already: only small-talk cards remain.
-        "due_cards": [{"id": "card-1", "front": "exhausted", "back": "agotado"}],
+        "due_cards": [
+            {"id": "card-1", "front": "I would like…", "back": "quisiera…"},
+            {"id": "card-2", "front": "the bill / check", "back": "la cuenta"},
+        ],
+        "existing_cards": [],
     }
     result = await post_session_agent.run(
         "Analyze the session and generate cards and recap.", deps=deps
-    )  # type: ignore[arg-type]
+    )
     assert isinstance(result.output, PostSessionResult)
     analysis = result.output
     for grade in analysis.reviewed_cards:
-        # The lesson-covered card must not be re-graded here.
-        assert grade.card_id != "card-2"
+        assert grade.card_id in {"card-1", "card-2"}
+        assert grade.evidence.strip(), "each rubric grade cites the transcript"
+        assert grade.outcome in {
+            "strong_pass",
+            "pass",
+            "recognition_pass",
+            "miss",
+            "not_attempted",
+        }
+    # card-1 was used (wrongly once, then corrected): it must be graded, not ignored.
+    graded_ids = {grade.card_id for grade in analysis.reviewed_cards}
+    assert "card-1" in graded_ids, "the rubric grades every card the transcript touched"
     assert analysis.recap.next_time_preview.strip()
 
 
@@ -268,12 +153,10 @@ async def test_post_session_produces_valid_analysis():
 @pytest.mark.asyncio
 async def test_post_session_correct_confident_transcript_yields_no_cards():
     """Harvest rule: with no mistakes and no questions, 0 cards is the correct output."""
-    deps = {
+    deps: PostSessionDeps = {
         "user_id": "user-1",
         "session_id": "session-1",
         "target_language": "es",
-        "lessons": [],
-        "existing_cards": [{"front": "the bill / check", "back": "la cuenta"}],
         "transcript": [
             {"speaker": "tutor", "text": "¡Hola Alex! ¿Cómo estás hoy?"},
             {
@@ -298,8 +181,9 @@ async def test_post_session_correct_confident_transcript_yields_no_cards():
             },
         ],
         "due_cards": [],
+        "existing_cards": [{"front": "the bill / check", "back": "la cuenta"}],
     }
-    result = await post_session_agent.run("Analyze the session.", deps=deps)  # type: ignore[arg-type]
+    result = await post_session_agent.run("Analyze the session.", deps=deps)
     assert isinstance(result.output, PostSessionResult)
     assert result.output.new_cards == []
 
@@ -318,16 +202,15 @@ async def test_post_session_corrected_item_yields_card_citing_transcript():
         },
         {"speaker": "user", "text": "Fui con mi hermana. ¿Qué tiempo hace para ir al cine?"},
     ]
-    deps = {
+    deps: PostSessionDeps = {
         "user_id": "user-1",
         "session_id": "session-1",
         "target_language": "es",
-        "lessons": [],
-        "existing_cards": [],
         "transcript": transcript,
         "due_cards": [],
+        "existing_cards": [],
     }
-    result = await post_session_agent.run("Analyze the session.", deps=deps)  # type: ignore[arg-type]
+    result = await post_session_agent.run("Analyze the session.", deps=deps)
     assert isinstance(result.output, PostSessionResult)
     assert result.output.new_cards, "a corrected item must become at least one card"
     transcript_text = " ".join(message["text"] for message in transcript)

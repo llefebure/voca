@@ -5,8 +5,6 @@ import pytest
 from fsrs import Rating
 
 from voca import main as voca_main
-from voca.agents.lesson_grader_agent import CardGrade as TargetGrade
-from voca.agents.lesson_grader_agent import LessonGrades, LessonSummary
 from voca.agents.post_session_agent import (
     CardCandidate,
     CardGrade,
@@ -14,17 +12,13 @@ from voca.agents.post_session_agent import (
     ProfileUpdates,
     SessionRecap,
 )
-from voca.services.lesson_flow import LessonSpec, new_lesson
 from voca.services.srs import new_card_state
 
 AUTH = {"Authorization": "Bearer valid-token"}
 
 
-def active(lessons: list[dict] | None = None) -> dict:
-    row = {"id": "sess-1", "user_id": "user-1", "status": "active", "language": "es"}
-    if lessons is not None:
-        row["lessons"] = lessons
-    return row
+def active() -> dict:
+    return {"id": "sess-1", "user_id": "user-1", "status": "active", "language": "es"}
 
 
 AUTH = {"Authorization": "Bearer valid-token"}
@@ -49,7 +43,7 @@ def analyst_result() -> PostSessionResult:
                 reason="learner asked for it",
             )
         ],
-        reviewed_cards=[CardGrade(card_id="card-1", outcome="pass")],
+        reviewed_cards=[CardGrade(card_id="card-1", outcome="pass", evidence="lo usó")],
         recap=SessionRecap(
             positives=["good vocabulary"],
             key_corrections=["ser vs estar"],
@@ -254,7 +248,7 @@ async def test_end_session_inserts_cards_and_updates_srs(
 async def test_end_session_skips_not_attempted_cards(client, fake_supabase, monkeypatch):
     result = PostSessionResult(
         new_cards=[],
-        reviewed_cards=[CardGrade(card_id="card-1", outcome="not_attempted")],
+        reviewed_cards=[CardGrade(card_id="card-1", outcome="not_attempted", evidence="")],
         recap=SessionRecap(
             positives=[],
             key_corrections=[],
@@ -471,45 +465,16 @@ def test_harvest_new_cards_normalizes_before_matching():
     assert [card.front for card in kept] == ["tener sed"]
 
 
-# --- Lesson-aware session end: sweep excludes lesson-graded cards ------------------
-
-
-def completed_lesson() -> dict:
-    lesson = new_lesson(
-        LessonSpec(template="role_play", title="At the café"),
-        [],
-        [{"id": "card-1", "front": "quisiera", "back": "I would like"}],
-        "reason",
-        "Intro",
-    )
-    lesson["status"] = "completed"
-    lesson["completed_at"] = "2025-01-01T01:00:00+00:00"
-    lesson["grades"] = [
-        {"card_id": "card-1", "outcome": "pass", "bonus_use": True, "evidence": "lo usó"}
-    ]
-    lesson["summary"] = {
-        "headline": "Ordered coffee confidently",
-        "positives": ["good formality"],
-        "key_phrases": ["¿me trae la cuenta?"],
-        "bonus_uses": ["Quisiera un cortado, por favor."],
-    }
-    return lesson
+# --- Session end: the FSRS rubric grades the whole transcript -----------------------
 
 
 @pytest.mark.asyncio
-async def test_end_session_sweeps_only_ungraded_cards(client, fake_supabase, monkeypatch):
-    """Cards already graded by a lesson never re-enter the analyst's grading slate."""
-    fake_supabase.results[("sessions", "select")] = [
-        {
-            "id": "sess-1",
-            "user_id": "user-1",
-            "status": "active",
-            "language": "es",
-            "lessons": [completed_lesson()],
-        }
-    ]
+async def test_end_session_sweeps_all_due_cards(client, fake_supabase, monkeypatch):
+    """The rubric maps the entire transcript to the analyst's grading slate."""
+    fake_supabase.results[("sessions", "select")] = [active()]
     fake_supabase.results[("transcripts", "select")] = [
-        {"speaker": "user", "text": "¿Cómo digo 'I am exhausted'?"}
+        {"speaker": "user", "text": "¿Cómo digo 'I am exhausted'?"},
+        {"speaker": "tutor", "text": "Estoy agotado"},
     ]
     fake_supabase.results[("cards", "select")] = [
         {"id": "card-1", "front": "quisiera", "fsrs_data": new_card_state()},
@@ -517,84 +482,31 @@ async def test_end_session_sweeps_only_ungraded_cards(client, fake_supabase, mon
     ]
     result = PostSessionResult(
         new_cards=[],
-        reviewed_cards=[CardGrade(card_id="card-2", outcome="recognition_pass")],
+        reviewed_cards=[
+            CardGrade(card_id="card-2", outcome="recognition_pass", evidence="Estoy agotado")
+        ],
         recap=SessionRecap(positives=[], key_corrections=[], next_time_preview="next"),
         profile_updates=ProfileUpdates(),
     )
 
     async def fake_run(_prompt, deps=None):
-        # The lesson-graded card is gone from the analyst's slate; the untouched
-        # small-talk card is still due.
-        assert deps["due_cards"] == [{"id": "card-2", "front": "exhausted", "back": ""}]
-        # The analyst sees this session's lessons to inform the recap.
-        assert deps["lessons"][0]["spec"]["title"] == "At the café"
+        # The slate contains every due card; nothing is pre-excluded.
+        assert deps["due_cards"] == [
+            {"id": "card-1", "front": "quisiera", "back": ""},
+            {"id": "card-2", "front": "exhausted", "back": ""},
+        ]
+        assert deps["transcript"][-1]["text"] == "Estoy agotado"
         return type("R", (), {"output": result})()
 
     monkeypatch.setattr(voca_main.post_session_agent, "run", fake_run)
     response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
     recap = response.json()["recap"]
-    assert recap["lessons"][0]["title"] == "At the café"
-    assert recap["lessons"][0]["template_name"] == "Role Play"
-    assert recap["lessons"][0]["bonus_uses_count"] == 1
-    assert recap["lessons"][0]["summary"]["headline"] == "Ordered coffee confidently"
-    # The small-talk card's review has no lesson_id (the lesson already logged its own).
+    assert "lessons" not in recap
+    assert recap["user_word_count"] >= 1
     review_rows = fake_supabase.inserted_rows("card_reviews")
-    assert review_rows[0]["card_id"] == "card-2"
+    assert [row["card_id"] for row in review_rows] == ["card-2"]
     assert review_rows[0].get("lesson_id") is None
-
-
-@pytest.mark.asyncio
-async def test_grade_and_complete_writes_fsrs_and_recap_payload(client, fake_supabase, monkeypatch):
-    """The grader path: lesson-completed grades write FSRS + card_reviews.lesson_id."""
-    lesson = new_lesson(
-        LessonSpec(template="role_play", title="At the café"),
-        [],
-        [{"id": "card-1", "front": "quisiera", "back": "I would like"}],
-        "reason",
-        "Intro",
-    )
-    lesson["status"] = "active"
-    lesson["accepted_at"] = "2025-01-01T00:00:10+00:00"
-    fake_supabase.results[("sessions", "select")] = [active(lessons=[lesson])]
-    fake_supabase.results[("transcripts", "select")] = [
-        {
-            "speaker": "user",
-            "text": "Quisiera un cortado, por favor.",
-            "created_at": "2025-01-01T00:00:20+00:00",
-        }
-    ]
-    fake_supabase.results[("cards", "select")] = [
-        {"id": "card-1", "front": "quisiera", "fsrs_data": new_card_state()}
-    ]
-
-    async def fake_run(_prompt, deps=None):
-        assert deps["lesson"]["spec"]["title"] == "At the café"
-        grades = LessonGrades(
-            grades=[
-                TargetGrade(card_id="card-1", outcome="pass", evidence="lo usó"),
-                # A card the lesson never targeted — must be ignored.
-                TargetGrade(card_id="card-9", outcome="miss", evidence="x"),
-            ],
-            summary=LessonSummary(headline="Great", positives=[], key_phrases=[]),
-            bonus_uses=["Quisiera un cortado."],
-        )
-        return type("R", (), {"output": grades})()
-
-    monkeypatch.setattr(voca_main.lesson_grader_agent, "run", fake_run)
-
-    completed = await voca_main.grade_and_complete("user-1", "sess-1", "es")
-    assert completed is not None
-    assert completed["status"] == "completed"
-    assert completed["summary"]["bonus_uses"] == ["Quisiera un cortado."]
-    # Grades are stored as-is, but only a TARGETED card hit FSRS.
-    review_rows = fake_supabase.inserted_rows("card_reviews")
-    assert [row["card_id"] for row in review_rows] == ["card-1"]
-    assert review_rows[0]["lesson_id"] == lesson["id"]
-    assert review_rows[0]["rating"] == int(Rating.Good)
-    stored = fake_supabase.updated_rows("sessions")[-1]["values"]["lessons"]
-    assert stored[0]["status"] == "completed"
-    assert len(stored[0]["grades"]) == 2  # non-target grade kept for the record only
 
 
 # --- translate + harvest backstops -----------------------------------------------------------------
@@ -710,66 +622,34 @@ def test_fetch_due_cards_scopes_by_language(fake_supabase):
 
 
 @pytest.mark.asyncio
-async def test_end_session_mid_lesson_closes_out_and_recaps(client, fake_supabase, monkeypatch):
-    """Ending mid-lesson: the in-flight lesson closes (no grades), the pending
-    proposal declines, and the recap tolerates a summary-less lesson (regression:
-    `summary=None` crashed the recap builder)."""
-    active_lesson = new_lesson(
-        LessonSpec(template="role_play", title="At the café"),
-        [],
-        [{"id": "card-1", "front": "quisiera", "back": "I would like"}],
-        "reason",
-        "Intro",
-    )
-    active_lesson["status"] = "active"
-    active_lesson["accepted_at"] = "2025-01-01T00:00:10+00:00"
-    pending_lesson = new_lesson(
-        LessonSpec(template="reading_discussion", title="Reading"),
-        [],
-        [],
-        "reason",
-        "Intro",
-    )
-    fake_supabase.results[("sessions", "select")] = [
-        active(lessons=[active_lesson, pending_lesson])
-    ]
+async def test_end_session_recap_includes_rubric_grade_outcomes_only_internally(
+    client, fake_supabase, monkeypatch
+):
+    """Grading is internal: the recap never exposes FSRS statuses or bonus marks."""
+    fake_supabase.results[("sessions", "select")] = [active()]
     fake_supabase.results[("transcripts", "select")] = [
         {"speaker": "user", "text": "Quisiera un cortado, por favor."}
     ]
     fake_supabase.results[("cards", "select")] = [
         {"id": "card-1", "front": "quisiera", "fsrs_data": new_card_state()}
     ]
-
-    from voca.agents.post_session_agent import CardGrade as AnalystGrade
-
     result = PostSessionResult(
         new_cards=[],
-        reviewed_cards=[AnalystGrade(card_id="card-1", outcome="recognition_pass")],
+        reviewed_cards=[CardGrade(card_id="card-1", outcome="strong_pass", evidence="lo usó")],
         recap=SessionRecap(positives=[], key_corrections=[], next_time_preview="next"),
         profile_updates=ProfileUpdates(),
     )
 
     async def fake_run(_prompt, deps=None):
-        # The ungraded lesson targets fall back to the session-end sweep: the
-        # analyst still gets them as due cards (nothing was lesson-graded).
-        assert any(card["id"] == "card-1" for card in deps["due_cards"])
         return type("R", (), {"output": result})()
 
     monkeypatch.setattr(voca_main.post_session_agent, "run", fake_run)
-
     response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
     recap = response.json()["recap"]
-    by_title = {lesson["title"]: lesson for lesson in recap["lessons"]}
-    assert by_title["At the café"]["status"] == "completed"
-    assert by_title["At the café"]["summary"] is None  # closed without grades
-    assert by_title["At the café"]["bonus_uses_count"] == 0
-    assert by_title["Reading"]["status"] == "declined"
-
-    stored = next(
-        row["values"]["lessons"]
-        for row in fake_supabase.updated_rows("sessions")
-        if "lessons" in row["values"]
-    )
-    statuses = {row["spec"]["title"]: row["status"] for row in stored}
-    assert statuses == {"At the café": "completed", "Reading": "declined"}
+    # No FSRS statuses, no stars, no lesson/bonus structure leaks into the recap.
+    serialized = str(recap)
+    for token in ("lessons", "bonus", "⭐", "strong_pass", "card_id", "fsrs"):
+        assert token not in serialized
+    # The rating landed in the review log (internal state only).
+    assert fake_supabase.inserted_rows("card_reviews")[0]["rating"] == 4
