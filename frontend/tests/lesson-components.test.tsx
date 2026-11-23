@@ -193,3 +193,18 @@ describe('LessonThreadBlock record', () => {
     expect(screen.getByText('Lesson conversation')).toBeVisible()
   })
 })
+
+describe('cleanEscapedText', () => {
+  it('decodes literal escape sequences in stored lesson payloads', () => {
+    const cleaned = cleanEscapedText({
+      markdown: '**Hotel Sol y Luna**\\n\\n| Hora | Act |\\n| :--- | :--- |\\n| 8 | Desayuno |',
+      nested: { text: 'línea 1\\nlínea 2' },
+      untouched: 'sin secuencias',
+    })
+    expect(cleaned.markdown).toBe(
+      '**Hotel Sol y Luna**\n\n| Hora | Act |\n| :--- | :--- |\n| 8 | Desayuno |',
+    )
+    expect(cleaned.nested.text).toBe('línea 1\nlínea 2')
+    expect(cleaned.untouched).toBe('sin secuencias')
+  })
+})

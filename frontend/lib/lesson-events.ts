@@ -63,3 +63,24 @@ export type ChatDataTypes = {
   lesson_completed: { lesson: LessonInstance }
   lesson_declined: { lesson_id: string; title?: string | null; reason?: string | null }
 }
+
+/**
+ * Older stored rows carry gemma's literal \n sequences (the model double-escapes
+ * inside tool-arg strings); decode them for display when replaying payloads.
+ */
+export function cleanEscapedText<T>(value: T): T {
+  if (typeof value === 'string') {
+    return value
+      .replace(/\\r\\n/g, '\n')
+      .replace(/\\r/g, '\n')
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t') as T
+  }
+  if (Array.isArray(value)) return value.map((item) => cleanEscapedText(item)) as T
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(value)) out[key] = cleanEscapedText(item)
+    return out as T
+  }
+  return value
+}

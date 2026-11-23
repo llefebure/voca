@@ -19,6 +19,7 @@ import { supabase } from '@/lib/supabase'
 import { BACKEND_URL } from '@/lib/api'
 import { DEFAULT_LANGUAGE, languageName } from '@/lib/languages'
 import type { ChatDataTypes, LessonInstance } from '@/lib/lesson-events'
+import { cleanEscapedText } from '@/lib/lesson-events'
 import { useLanguage } from '@/components/language-context'
 import { useSpeech } from '@/lib/use-speech'
 import { DashboardLayout } from '@/components/dashboard-layout'
@@ -353,7 +354,12 @@ function ChatView({
               payload.kind === 'lesson_completed' ||
               payload.kind === 'lesson_declined'
             ) {
-              restored.push(dataPartMessage(`restored-${payload.kind}-${index}`, payload.kind, payload.data))
+              // Decode escape sequences older stored rows may carry (see
+              // cleanEscapedText) so restored lessons render their line breaks.
+              const data = cleanEscapedText(payload.data) as
+                | { lesson: LessonInstance }
+                | undefined
+              restored.push(dataPartMessage(`restored-${payload.kind}-${index}`, payload.kind, data))
             }
             continue
           }
