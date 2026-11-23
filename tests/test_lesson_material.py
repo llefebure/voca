@@ -108,3 +108,26 @@ def test_tasks_items_emitted_as_plain_strings_get_wrapped():
     )
     assert blocks[0].items[0].task == "Di qué comiste ayer"
     assert blocks[0].items[1].task == "Pide la cuenta"
+
+
+def test_vocab_pair_items_in_a_tasks_block_are_retyped_as_word_bank():
+    """gemma tags vocabulary rows `tasks` and gives them term/translation objects."""
+    blocks, dropped = validate_material(
+        "reading_discussion",
+        [
+            {"type": "text", "markdown": "passage"},
+            {"type": "questions", "items": ["Q?"]},
+            {
+                "type": "tasks",
+                "items": [
+                    {"term": "quisiera…", "translation": "I would like…"},
+                    {"term": "la cuenta", "translation": "the bill"},
+                ],
+            },
+        ],
+    )
+    kinds = [block.type for block in blocks]
+    assert kinds == ["text", "questions", "word_bank"]
+    word_bank = blocks[2]
+    assert word_bank.items == ["quisiera…", "la cuenta"]
+    assert dropped == []

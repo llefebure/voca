@@ -9,7 +9,7 @@ with zero additional generation wait.
 
 from typing import Any, NotRequired, TypedDict
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic_ai import Agent, RunContext
 
 from voca.services.languages import language_name
@@ -22,17 +22,32 @@ from voca.services.llm import voca_model
 def _untangle_proposal(value: Any) -> Any:
     """Recover the model's common shape slips before schema validation.
 
-    ``material`` and ``target_card_ids`` sometimes arrive nested inside
-    ``lesson`` (they were one object in an earlier schema); lift them to the
-    top level so the real schema can fail for real problems, not shape ones.
+    Runs on the whole proposal dict (model-level before-validator):
+    ``material`` and ``target_card_ids`` sometimes arrive nested inside ``lesson``
+    (they were one object in an earlier schema); lift them to the top level. A
+    missing ``lesson.title`` falls back to the topic — one less reason for the
+    retry loop to burn a generation on a cosmetic omission.
+
+    Tolerates the whole value BEING the lesson dict (when the model omits the
+    ``lesson`` wrapper entirely, the lifted/fallback logic still applies).
     """
     if not isinstance(value, dict):
         return value
+    if "lesson" not in value and "template" in value:
+        # The model emitted the lesson spec directly; treat it as `lesson`.
+        value = {"lesson": value}
     lesson = value.get("lesson")
     if isinstance(lesson, dict):
+        lesson = dict(lesson)
+        lifted: dict[str, Any] = {}
         for key in ("material", "target_card_ids"):
             if key in lesson and key not in value:
-                return {**value, key: lesson.pop(key)}
+                lifted[key] = lesson.pop(key)
+        if not lesson.get("title"):
+            lesson["title"] = (
+                lesson.get("topic") or f"Lesson ({lesson.get('template', 'conversation')})"
+            )
+        value = {**value, "lesson": lesson, **lifted}
     return value
 
 
@@ -62,7 +77,7 @@ class LessonProposal(BaseModel):
         description="One sentence (English): why this lesson fits this learner right now"
     )
 
-    @field_validator("lesson", mode="before")
+    @model_validator(mode="before")
     @classmethod
     def _untangle(cls, value: Any) -> Any:
         return _untangle_proposal(value)

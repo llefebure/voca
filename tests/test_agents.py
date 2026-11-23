@@ -476,3 +476,42 @@ async def test_post_session_agent_output_schema():
         )
     assert isinstance(result.output, PostSessionResult)
     assert isinstance(result.output.recap, BaseModel)
+
+
+def test_planner_untangles_lesson_nested_material_and_missing_title():
+    """The proposal's shape slips are coerced before validation: material lifted
+    out of `lesson`, and a missing title falls back to topic/template."""
+    proposal = LessonProposal.model_validate(
+        {
+            "lesson": {
+                "template": "reading_discussion",
+                "objectives": ["literal recall"],
+                "material": [{"type": "text", "markdown": "A passage."}],
+                "target_card_ids": ["card-1"],
+            },
+            "material": [{"type": "text", "markdown": "A passage."}],
+            "target_card_ids": ["card-1"],
+            "intro_line": "Lee esto.",
+            "reason": "r",
+        }
+    )
+    assert proposal.lesson.title == "Lesson (reading_discussion)"
+
+    titled_from_topic = LessonProposal.model_validate(
+        {
+            "lesson": {"template": "role_play", "topic": "At the pharmacy", "objectives": []},
+            "material": [
+                {
+                    "type": "scenario",
+                    "setting": "s",
+                    "learner_role": "l",
+                    "tutor_role": "t",
+                    "goal": "g",
+                }
+            ],
+            "target_card_ids": [],
+            "intro_line": "x",
+            "reason": "y",
+        }
+    )
+    assert titled_from_topic.lesson.title == "At the pharmacy"

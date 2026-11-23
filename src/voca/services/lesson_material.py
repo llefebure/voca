@@ -99,11 +99,21 @@ def _tag_from_key_or_fields(block: dict[str, Any]) -> str | None:
         items = block["items"]
         first = items[0] if items else None
         if isinstance(first, dict):
+            # Vocabulary-pair objects ({"term": …, "translation": …}) are a word
+            # bank however they get tagged; only task-shaped objects are tasks.
+            if _has_vocab_keys(first):
+                return "word_bank"
             return "tasks"
         if items and all(not str(item).strip().endswith("?") for item in items):
             return "word_bank"
         return "questions"
     return None
+
+
+def _has_vocab_keys(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    return any(key in item for key in ("term", "phrase", "word", "es"))
 
 
 def normalize_block(block: Any) -> Any:
@@ -125,36 +135,50 @@ def normalize_block(block: Any) -> Any:
         block = {**block, "type": inferred}
     else:
         block = {**block, "type": _TYPE_ALIASES[raw_type]}
-    return _coerce_items(block, str(block["type"]))
+    payload, retyped = _coerce_items(block, str(block["type"]))
+    # _coerce_items may retype the block; the payload's original ``type`` key
+    # must not shadow the new tag in the spread.
+    return {"type": retyped, **{key: value for key, value in payload.items() if key != "type"}}
 
 
-def _coerce_items(payload: dict[str, Any], block_type: str) -> dict[str, Any]:
-    """Flatten model-invented item shapes into each block's declared schema."""
+def _item_term(item: dict[str, Any]) -> Any:
+    """A readable term from a model-invented vocab-pair object."""
+    return (
+        item.get("term")
+        or item.get("phrase")
+        or item.get("word")
+        or item.get("es")
+        or next((v for v in item.values() if isinstance(v, str) and v.strip()), str(item))
+    )
+
+
+def _coerce_items(payload: dict[str, Any], block_type: str) -> tuple[dict[str, Any], str]:
+    """Flatten model-invented item shapes into each block's declared schema.
+
+    Vocabulary-pair objects are always a word bank (retyping a miscategorized
+    ``tasks`` block); strings inside a tasks block are wrapped into task items.
+    """
     items = payload.get("items")
     if not items:
-        return payload
-    if block_type == "word_bank" and any(isinstance(item, dict) for item in items):
-        payload = {
-            **payload,
-            "items": [
-                (
-                    item.get("term")
-                    or item.get("phrase")
-                    or item.get("word")
-                    or item.get("es")
-                    or str(item)
-                )
-                if isinstance(item, dict)
-                else str(item)
-                for item in items
-            ],
-        }
-    elif block_type == "tasks" and any(isinstance(item, str) for item in items):
+        return payload, block_type
+    if any(_has_vocab_keys(item) for item in items):
+        # Vocabulary-pair objects: flatten to plain terms and retype as a word
+        # bank however the model tagged the block.
+        return (
+            {
+                **payload,
+                "items": [
+                    _item_term(item) if isinstance(item, dict) else str(item) for item in items
+                ],
+            },
+            "word_bank",
+        )
+    if block_type == "tasks" and any(isinstance(item, str) for item in items):
         payload = {
             **payload,
             "items": [{"task": str(item)} if isinstance(item, str) else item for item in items],
         }
-    return payload
+    return payload, block_type
 
 
 def normalize_blocks(blocks: Any) -> Any:
