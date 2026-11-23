@@ -10,6 +10,7 @@ import {
   ProposalCard,
 } from '@/components/lesson/lesson-components'
 import type { LessonInstance, MaterialBlock } from '@/lib/lesson-events'
+import { cleanEscapedText } from '@/lib/lesson-events'
 
 function proposal(): LessonInstance {
   return {
