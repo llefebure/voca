@@ -170,3 +170,26 @@ describe('LessonThreadBlock', () => {
     expect(screen.getByTestId('lesson-thread-block').getAttribute('data-status')).toBe('completed')
   })
 })
+
+describe('LessonThreadBlock record', () => {
+  it('expands to include the lesson chat (read-only) below the material', () => {
+    const record = (
+      <>
+        <div>tutor: ¡Bienvenido!</div>
+        <div>you: un cortado, por favor</div>
+      </>
+    )
+    render(
+      <LessonThreadBlock
+        lesson={{ ...proposal(), status: 'active' }}
+        record={record}
+        active
+      />,
+    )
+    // Collapsed by default while the docked view holds the chat.
+    expect(screen.queryByText('tutor: ¡Bienvenido!')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Role Play/ }))
+    expect(screen.getByText('tutor: ¡Bienvenido!')).toBeVisible()
+    expect(screen.getByText('Lesson conversation')).toBeVisible()
+  })
+})

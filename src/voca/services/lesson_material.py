@@ -116,6 +116,26 @@ def _has_vocab_keys(item: Any) -> bool:
     return any(key in item for key in ("term", "phrase", "word", "es"))
 
 
+def _clean_strings(value: Any) -> Any:
+    """Decode escape sequences gemma double-escapes inside tool-arg strings.
+
+    Verified live: material text arrives with literal ``\\n`` (and occasionally
+    ``\\r``/``\\t``) sequences instead of real line breaks; decode them.
+    """
+    if isinstance(value, str):
+        return (
+            value.replace("\\r\\n", "\n")
+            .replace("\\r", "\n")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+        )
+    if isinstance(value, dict):
+        return {key: _clean_strings(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_clean_strings(item) for item in value]
+    return value
+
+
 def normalize_block(block: Any) -> Any:
     """Coerce a model-emitted material block into the tagged, union-ready shape."""
     if not isinstance(block, dict):
@@ -138,7 +158,9 @@ def normalize_block(block: Any) -> Any:
     payload, retyped = _coerce_items(block, str(block["type"]))
     # _coerce_items may retype the block; the payload's original ``type`` key
     # must not shadow the new tag in the spread.
-    return {"type": retyped, **{key: value for key, value in payload.items() if key != "type"}}
+    return _clean_strings(
+        {"type": retyped, **{key: value for key, value in payload.items() if key != "type"}}
+    )
 
 
 def _item_term(item: dict[str, Any]) -> Any:

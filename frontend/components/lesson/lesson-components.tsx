@@ -339,18 +339,21 @@ export function LessonDock({ lesson }: { lesson: LessonInstance }) {
 
 /**
  * The chat-thread record of a lesson: a collapsed bar (title · status · bonus
- * count) that expands to the material and, once present, the completion
- * summary. Collapsed while the lesson is docked above; auto-collapses on
- * completion; expandable at any time afterwards.
+ * count) that expands to the material, the completion summary, and the lesson's
+ * own chat. Collapsed while the lesson is docked (split view); expandable at any
+ * time afterwards.
  */
 export function LessonThreadBlock({
   lesson,
   completed,
   active,
+  record,
 }: {
   lesson: LessonInstance
   completed?: LessonInstance | null
   active?: boolean
+  /** The lesson's chat messages, rendered read-only when expanded. */
+  record?: React.ReactNode
 }) {
   // Collapsed by default: the pinned dock holds the material while the lesson is
   // in progress, so the thread keeps a tappable record that stays put once the
@@ -383,6 +386,14 @@ export function LessonThreadBlock({
         <div className="space-y-2 pt-2">
           <LessonMaterial lesson={lesson} />
           {completed?.summary ? <LessonSummaryCard lesson={completed} /> : null}
+          {record ? (
+            <div className="space-y-1.5 rounded-lg border bg-card/60 p-3">
+              <div className="text-muted-foreground mb-1 text-xs font-medium tracking-wide uppercase">
+                Lesson conversation
+              </div>
+              {record}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

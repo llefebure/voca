@@ -131,3 +131,22 @@ def test_vocab_pair_items_in_a_tasks_block_are_retyped_as_word_bank():
     word_bank = blocks[2]
     assert word_bank.items == ["quisiera…", "la cuenta"]
     assert dropped == []
+
+
+def test_double_escaped_newlines_in_text_survive_as_line_breaks():
+    """gemma emits literal \\n sequences inside markdown (verified in stored data);
+    they must decode into real line breaks so tables/paragraphs render."""
+    blocks, _ = validate_material(
+        "reading_discussion",
+        [
+            {
+                "type": "text",
+                "markdown": "**Hotel Sol y Luna**\\n\\n| Hora | Act |\\n| :--- | :--- |\\n| 08:00 | Desayuno |",
+            },
+            {"type": "questions", "items": ["¿Cómo fue el viaje?\\n¿Qué visitaste?"]},
+        ],
+    )
+    markdown = blocks[0].markdown
+    assert "\\n" not in markdown
+    assert "\n\n" in markdown
+    assert blocks[1].items[0].endswith("¿Qué visitaste?")
