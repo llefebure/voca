@@ -22,6 +22,7 @@ from pydantic_ai import Agent, RunContext
 
 from voca.services.languages import language_name
 from voca.services.lesson_flow import (
+    NUDGE_TURNS,
     PHASE_AWAITING_ACCEPT,
     PHASE_LESSON,
     PHASE_SMALL_TALK,
@@ -32,8 +33,6 @@ from voca.services.lesson_flow import (
 from voca.services.llm import voca_model
 
 logger = logging.getLogger(__name__)
-
-NudgeTurn = 4
 
 
 class TutorDeps(TypedDict):
@@ -112,7 +111,7 @@ def _small_talk_block(deps: TutorDeps, smalltalk_turns: int) -> str:
         "them; a used-in-context card counts extra for the learner — mention it warmly if "
         "they use one well.\n",
     ]
-    if smalltalk_turns >= NudgeTurn and not deps.get("pending_proposal"):
+    if smalltalk_turns >= NUDGE_TURNS and not deps.get("pending_proposal"):
         parts.append(
             "NUDGE (IMPORTANT): it is now time to offer a lesson — the learner is settled "
             "into casual chat. In THIS reply you must: (1) name ONE concrete lesson idea "

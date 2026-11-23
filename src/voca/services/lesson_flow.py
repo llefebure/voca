@@ -29,6 +29,13 @@ PHASE_LESSON = "lesson"
 PRODUCTION_OUTCOMES = {"pass", "strong_pass"}
 CREDITED_OUTCOMES = {"recognition_pass", "pass", "strong_pass"}
 
+# Small-talk threshold where the tutor is nudged to offer a lesson; the backend
+# force-proposes two turns later if a reply went by without a tool call.
+NUDGE_TURNS = 4
+FORCE_PROPOSE_TURNS = NUDGE_TURNS + 2
+# After a decline, wait a bit before offering a fresh idea again.
+DECLINE_COOLDOWN_SECONDS = 180
+
 
 class LessonSpec(BaseModel):
     template: str
@@ -140,6 +147,7 @@ def activate(lesson: dict[str, Any]) -> dict[str, Any]:
 def decline(lesson: dict[str, Any], reason: str | None = None) -> dict[str, Any]:
     lesson = dict(lesson)
     lesson["status"] = "declined"
+    lesson["declined_at"] = now_iso()
     lesson["declined_reason"] = reason
     return lesson
 
@@ -169,6 +177,37 @@ def validate_material(
     if allowed is None:
         return [], [block.type for block in blocks]
     return filter_allowed(blocks, allowed)
+
+
+def eligible_for_force_propose(
+    lessons: list[dict[str, Any]],
+    smalltalk_turns: int,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Whether the backend should propose on its own after a quiet reply.
+
+    The tutor model drives lesson transitions through tools, but its calls are
+    stochastic (verified live: it occasionally writes an invitation without any
+    call). Past ``FORCE_PROPOSE_TURNS`` of small talk with nothing pending —
+    and no recent decline — the backend generates the proposal itself."""
+    if smalltalk_turns < FORCE_PROPOSE_TURNS:
+        return False
+    if derive_phase(lessons) != PHASE_SMALL_TALK:
+        return False
+    moment = now or datetime.now(UTC)
+    for lesson in lessons:
+        if lesson.get("status") != "declined":
+            continue
+        declined_at = lesson.get("declined_at")
+        if declined_at:
+            try:
+                passed = (moment - datetime.fromisoformat(declined_at)).total_seconds()
+            except ValueError:
+                continue
+            if passed < DECLINE_COOLDOWN_SECONDS:
+                return False  # respect the learner's "not now" before re-offering
+    return True
 
 
 def update_lessons(

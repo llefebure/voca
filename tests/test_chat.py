@@ -683,3 +683,88 @@ async def test_chat_captures_tool_code_leak(client, monkeypatch, fake_supabase):
     assert structured and structured[0]["kind"] == "proposal_ready"
     deltas = "".join(event["text"] for event in events if event["type"] == "delta")
     assert "tool_code" not in deltas and "propose_lesson(" not in deltas
+
+
+# --- Backend force-propose safety net -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chat_force_proposes_after_a_quiet_reply(client, monkeypatch, fake_supabase):
+    """A tutor reply with no tool call past the force threshold still yields a card."""
+    from voca.agents.session_planner_agent import LessonProposal
+    from voca.services.lesson_flow import LessonSpec
+
+    fake_supabase.results[("sessions", "select")] = [active_session_response(lessons=[])]
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
+    fake_supabase.results[("cards", "select")] = []
+    fake_supabase.results[("transcripts", "select")] = [
+        {"speaker": "user", "text": "hola", "created_at": "2025-01-01T00:00:01+00:00"}
+    ]
+
+    from voca.services.lesson_material import ScenarioBlock as _Scenario
+
+    proposal = LessonProposal(
+        lesson=LessonSpec(template="role_play", title="At the café", minutes=6),
+        material=[
+            _Scenario(setting="a café", learner_role="customer", tutor_role="barista", goal="order")
+        ],
+        target_card_ids=[],
+        intro_line="¡Hola!",
+        reason="you talked about coffee",
+    )
+
+    async def fake_planner_run(_prompt, deps=None):
+        return type("R", (), {"output": proposal})()
+
+    monkeypatch.setattr(voca_main.session_planner_agent, "run", fake_planner_run)
+    monkeypatch.setattr(voca_main, "tutor_agent", FakeTutorAgent(["Sigamos charlando…"]))
+
+    history = [
+        {"role": "user", "content": f"turn {i}"}
+        for i in range(12)  # well past the force threshold
+    ]
+    response = await client.post(
+        "/chat",
+        json={"message": "sigamos", "session_id": "sess-1", "history": history},
+        headers=AUTH,
+    )
+    events = sse_events(response.text)
+    structured = [event for event in events if event["type"] == "event"]
+    assert structured and structured[0]["kind"] == "proposal_ready"
+    assert structured[0]["data"]["lesson"]["spec"]["title"] == "At the café"
+    # The proposal is persisted in the session's lessons array + transcript payload.
+    stored = fake_supabase.updated_rows("sessions")[-1]["values"]["lessons"]
+    assert stored and stored[0]["status"] == "proposed"
+    assert any(
+        row.get("payload", {}).get("kind") == "proposal_ready"
+        for row in fake_supabase.inserted_rows("transcripts")
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_force_propose_respects_decline_cooldown(client, monkeypatch, fake_supabase):
+    """A recent decline keeps the proposal quiet; a pending proposal is never doubled."""
+    from voca.services.lesson_flow import LessonSpec, new_lesson
+
+    pending = new_lesson(
+        LessonSpec(template="role_play", title="Pending"),
+        [],
+        [],
+        "reason",
+        "Intro",
+    )
+    fake_supabase.results[("sessions", "select")] = [active_session_response(lessons=[pending])]
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
+    fake_supabase.results[("cards", "select")] = []
+
+    async def fail_planner(_prompt, deps=None):
+        raise AssertionError("planner must not run while a proposal is pending")
+
+    monkeypatch.setattr(voca_main.session_planner_agent, "run", fail_planner)
+    monkeypatch.setattr(voca_main, "tutor_agent", FakeTutorAgent(["hola"]))
+
+    history = [{"role": "user", "content": "t"} for _ in range(20)]
+    response = await client.post(
+        "/chat", json={"message": "x", "session_id": "sess-1", "history": history}, headers=AUTH
+    )
+    assert not [event for event in sse_events(response.text) if event["type"] == "event"]

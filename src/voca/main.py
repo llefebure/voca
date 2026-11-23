@@ -785,6 +785,35 @@ async def start_session(user=Depends(get_current_user)):
     )
 
 
+async def maybe_force_proposal(
+    user_id: str, session_id: str, language: str | None, smalltalk_turns: int
+) -> dict | None:
+    """Backend safety net for a tutor reply that slipped past the propose tool.
+
+    The tutor model drives transitions through tools, but its calls are
+    stochastic: it occasionally writes an invitation without any call. Once
+    small talk passes the force threshold with nothing pending (and no recent
+    decline), the backend generates and persists the proposal itself.
+    """
+    session_row = await get_owned_session(session_id, user_id)
+    now = datetime.now(UTC)
+    if not lesson_flow.eligible_for_force_propose(
+        session_lessons(session_row), smalltalk_turns, now=now
+    ):
+        return None
+    lesson = await run_proposal(user_id, session_id, language or DEFAULT_LANGUAGE, "")
+    if lesson is None:
+        return None
+    await asyncio.to_thread(
+        insert_transcript,
+        session_id,
+        "system",
+        "",
+        {"kind": "proposal_ready", "data": {"lesson": lesson}},
+    )
+    return lesson
+
+
 @app.post("/sessions/lessons/accept")
 async def accept_lesson(request: SessionActionRequest, user=Depends(get_current_user)):
     """Activate the pending lesson proposal and stream the tutor's lesson opener."""
@@ -1011,9 +1040,20 @@ async def chat(request: ChatRequest, user=Depends(get_current_user)):
         user.id, session["id"], language, session_lessons(session), profile, request.history
     )
 
-    return sse_stream(
-        tutor_frames(request.message, pydantic_history(request.history), deps, session["id"])
-    )
+    smalltalk_turns = sum(1 for msg in request.history or [] if msg.get("role") == "user")
+
+    async def frames():
+        async for frame in tutor_frames(
+            request.message, pydantic_history(request.history), deps, session["id"]
+        ):
+            yield frame
+        # Safety net: if the tutor's reply went by without proposing (its tool
+        # calls are stochastic), the backend offers a lesson itself.
+        lesson = await maybe_force_proposal(user.id, session["id"], language, smalltalk_turns + 1)
+        if lesson is not None:
+            yield {"type": "event", "kind": "proposal_ready", "data": {"lesson": lesson}}
+
+    return sse_stream(frames())
 
 
 if __name__ == "__main__":

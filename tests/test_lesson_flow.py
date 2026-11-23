@@ -2,12 +2,15 @@
 
 from voca.services import lesson_flow
 from voca.services.lesson_flow import (
+    DECLINE_COOLDOWN_SECONDS,
+    FORCE_PROPOSE_TURNS,
     LessonSpec,
     activate,
     active_lesson,
     complete,
     decline,
     derive_phase,
+    eligible_for_force_propose,
     guard_begin,
     guard_complete,
     guard_propose,
@@ -92,6 +95,28 @@ def test_guards_block_out_of_phase_actions():
     assert guard_complete([]) is not None
     assert guard_complete([lesson("proposed", "l-props")]) is not None
     assert guard_complete([lesson("active", "l-active")]) is None
+
+
+def test_force_propose_eligibility():
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    assert not eligible_for_force_propose([], smalltalk_turns=FORCE_PROPOSE_TURNS - 1, now=now)
+    assert eligible_for_force_propose([], smalltalk_turns=FORCE_PROPOSE_TURNS, now=now)
+    # Non-small-talk phases never force.
+    assert not eligible_for_force_propose(
+        [lesson("proposed")], smalltalk_turns=FORCE_PROPOSE_TURNS, now=now
+    )
+    assert not eligible_for_force_propose(
+        [lesson("active")], smalltalk_turns=FORCE_PROPOSE_TURNS, now=now
+    )
+    # A recent decline is respected; an old one is not.
+    recent = decline(lesson("proposed"), "not now")
+    assert not eligible_for_force_propose([recent], smalltalk_turns=FORCE_PROPOSE_TURNS, now=now)
+    old = dict(
+        recent, declined_at=(now - timedelta(seconds=DECLINE_COOLDOWN_SECONDS + 1)).isoformat()
+    )
+    assert eligible_for_force_propose([old], smalltalk_turns=FORCE_PROPOSE_TURNS, now=now)
 
 
 def test_transitions_write_timestamps_and_payloads():
