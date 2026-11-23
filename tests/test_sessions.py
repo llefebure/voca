@@ -707,3 +707,69 @@ def test_fetch_due_cards_scopes_by_language(fake_supabase):
     # Without a language, no filter is applied (callsite decides the scope).
     voca_main.fetch_due_cards("user-1")
     assert fake_supabase.select_filters_rows("cards")[-1] == {"user_id": "user-1"}
+
+
+@pytest.mark.asyncio
+async def test_end_session_mid_lesson_closes_out_and_recaps(client, fake_supabase, monkeypatch):
+    """Ending mid-lesson: the in-flight lesson closes (no grades), the pending
+    proposal declines, and the recap tolerates a summary-less lesson (regression:
+    `summary=None` crashed the recap builder)."""
+    active_lesson = new_lesson(
+        LessonSpec(template="role_play", title="At the café"),
+        [],
+        [{"id": "card-1", "front": "quisiera", "back": "I would like"}],
+        "reason",
+        "Intro",
+    )
+    active_lesson["status"] = "active"
+    active_lesson["accepted_at"] = "2025-01-01T00:00:10+00:00"
+    pending_lesson = new_lesson(
+        LessonSpec(template="reading_discussion", title="Reading"),
+        [],
+        [],
+        "reason",
+        "Intro",
+    )
+    fake_supabase.results[("sessions", "select")] = [
+        active(lessons=[active_lesson, pending_lesson])
+    ]
+    fake_supabase.results[("transcripts", "select")] = [
+        {"speaker": "user", "text": "Quisiera un cortado, por favor."}
+    ]
+    fake_supabase.results[("cards", "select")] = [
+        {"id": "card-1", "front": "quisiera", "fsrs_data": new_card_state()}
+    ]
+
+    from voca.agents.post_session_agent import CardGrade as AnalystGrade
+
+    result = PostSessionResult(
+        new_cards=[],
+        reviewed_cards=[AnalystGrade(card_id="card-1", outcome="recognition_pass")],
+        recap=SessionRecap(positives=[], key_corrections=[], next_time_preview="next"),
+        profile_updates=ProfileUpdates(),
+    )
+
+    async def fake_run(_prompt, deps=None):
+        # The ungraded lesson targets fall back to the session-end sweep: the
+        # analyst still gets them as due cards (nothing was lesson-graded).
+        assert any(card["id"] == "card-1" for card in deps["due_cards"])
+        return type("R", (), {"output": result})()
+
+    monkeypatch.setattr(voca_main.post_session_agent, "run", fake_run)
+
+    response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
+    assert response.status_code == 200
+    recap = response.json()["recap"]
+    by_title = {lesson["title"]: lesson for lesson in recap["lessons"]}
+    assert by_title["At the café"]["status"] == "completed"
+    assert by_title["At the café"]["summary"] is None  # closed without grades
+    assert by_title["At the café"]["bonus_uses_count"] == 0
+    assert by_title["Reading"]["status"] == "declined"
+
+    stored = next(
+        row["values"]["lessons"]
+        for row in fake_supabase.updated_rows("sessions")
+        if "lessons" in row["values"]
+    )
+    statuses = {row["spec"]["title"]: row["status"] for row in stored}
+    assert statuses == {"At the café": "completed", "Reading": "declined"}

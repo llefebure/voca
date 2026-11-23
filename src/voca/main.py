@@ -873,8 +873,25 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
     )
     language = session.get("language")
     lessons = session_lessons(session)
+    # Ending a session mid-lesson (or with an unanswered proposal) closes those
+    # lessons out: an active lesson is completed without grades (its targets fall
+    # back to the session-end sweep), a pending proposal is declined by the archive.
+    closed = False
+    for index, lesson in enumerate(lessons):
+        status = lesson.get("status")
+        if status == "active":
+            lesson = lesson_flow.complete(lesson, [], None)
+            closed = True
+        elif status == "proposed":
+            lesson = lesson_flow.decline(lesson, "session ended before an answer")
+            closed = True
+        if closed and lessons[index] is not lesson:
+            lessons[index] = lesson
+    if closed:
+        await persist_lessons(session["id"], lessons)
     # Cards any lesson already graded are excluded — the analyst sweeps the rest
-    # (small-talk usage), so nothing is double-graded.
+    # (small-talk usage and any in-flight lesson's targets), so nothing is
+    # double-graded.
     graded_ids = {grade["card_id"] for lesson in lessons for grade in lesson.get("grades") or []}
     due_rows = await asyncio.to_thread(fetch_due_cards, user.id, language)
     due_cards = compact_cards([row for row in due_rows if row.get("id") not in graded_ids])
@@ -953,7 +970,7 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
             "template": (lesson.get("spec") or {}).get("template"),
             "template_name": template_name((lesson.get("spec") or {}).get("template")),
             "summary": lesson.get("summary"),
-            "bonus_uses_count": len(lesson.get("summary", {}).get("bonus_uses") or []),
+            "bonus_uses_count": len((lesson.get("summary") or {}).get("bonus_uses") or []),
         }
         for lesson in lessons
     ]
