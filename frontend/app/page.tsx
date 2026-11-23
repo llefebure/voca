@@ -24,7 +24,11 @@ import { useSpeech } from '@/lib/use-speech'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { Markdown } from '@/components/markdown'
 import { lessonTemplateName } from '@/lib/lesson-templates'
-import { LessonMaterial, LessonSummaryCard, ProposalCard } from '@/components/lesson/lesson-components'
+import {
+  LessonDock,
+  LessonThreadBlock,
+  ProposalCard,
+} from '@/components/lesson/lesson-components'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -211,7 +215,6 @@ function ChatView({
   const { activeLesson, pendingProposal } = React.useMemo(() => {
     let active: LessonInstance | null = null
     let pending: LessonInstance | null = null
-    let lastSummary: LessonInstance | null = null
     for (const message of messages) {
       for (const part of message.parts) {
         if (part.type === 'data-proposal_ready') {
@@ -221,13 +224,36 @@ function ChatView({
           pending = null
         } else if (part.type === 'data-lesson_completed') {
           active = null
-          lastSummary = part.data.lesson
         } else if (part.type === 'data-lesson_declined') {
           if (pending?.id === part.data.lesson_id) pending = null
         }
       }
     }
-    return { activeLesson: active, pendingProposal: pending, lastSummary }
+    return { activeLesson: active, pendingProposal: pending }
+  }, [messages])
+
+  // Lesson records in order: first `lesson_started` per id, plus the eventual
+  // `lesson_completed` payload merged in. The thread renders one collapsible
+  // block per lesson at the position of its `lesson_started` event.
+  const lessonTimeline = React.useMemo(() => {
+    const timeline = new Map<
+      string,
+      { lesson: LessonInstance; completed: LessonInstance | null }
+    >()
+    for (const message of messages) {
+      for (const part of message.parts) {
+        if (part.type === 'data-lesson_started') {
+          const entry = timeline.get(part.data.lesson.id)
+          if (entry) entry.lesson = part.data.lesson
+          else timeline.set(part.data.lesson.id, { lesson: part.data.lesson, completed: null })
+        } else if (part.type === 'data-lesson_completed') {
+          const entry = timeline.get(part.data.lesson.id)
+          if (entry) entry.completed = part.data.lesson
+          else timeline.set(part.data.lesson.id, { lesson: part.data.lesson, completed: part.data.lesson })
+        }
+      }
+    }
+    return timeline
   }, [messages])
 
   // The lesson banner in the header derives straight from that state.
@@ -613,6 +639,11 @@ function ChatView({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col px-8">
+        {activeLesson ? (
+          <div className="pb-4">
+            <LessonDock lesson={activeLesson} />
+          </div>
+        ) : null}
         {messages.length === 0 ? (
           <Empty className="flex-1">
             <EmptyHeader>
@@ -650,7 +681,10 @@ function ChatView({
                               {message.parts.map((part, partIndex) => {
                                 if (part.type === 'text') {
                                   const text = part.text
-                                  if (isUser && !text.trim()) return null
+                                  // Empty shells (pre-first-delta assistant turns,
+                                  // no-op submits) never render; the status chip
+                                  // covers the wait instead.
+                                  if (!text.trim()) return null
                                   return (
                                     <React.Fragment key={`text-${partIndex}`}>
                                       <Bubble
@@ -729,17 +763,22 @@ function ChatView({
                                   )
                                 }
                                 if (part.type === 'data-lesson_started') {
-                                  const lesson = part.data.lesson
-                                  if (lesson.id !== activeLesson?.id) return null
-                                  return <LessonMaterial key={`lesson-${lesson.id}`} lesson={lesson} />
-                                }
-                                if (part.type === 'data-lesson_completed') {
+                                  const entry = lessonTimeline.get(part.data.lesson.id)
+                                  if (!entry) return null
                                   return (
-                                    <LessonSummaryCard
-                                      key={`summary-${part.data.lesson.id}`}
-                                      lesson={part.data.lesson}
+                                    <LessonThreadBlock
+                                      key={`lesson-block-${entry.lesson.id}`}
+                                      lesson={entry.lesson}
+                                      completed={entry.completed}
+                                      active={activeLesson?.id === entry.lesson.id}
                                     />
                                   )
+                                }
+                                if (part.type === 'data-lesson_completed') {
+                                  // The completion summary lives inside the lesson's
+                                  // thread block (the backend flow always starts a
+                                  // lesson before completing it).
+                                  return null
                                 }
                                 // `data-status` parts render via streamingStatusChip.
                                 return null
@@ -750,7 +789,7 @@ function ChatView({
                       </MessageScrollerItem>
                     )
                   })}
-                  {streamingStatusChip(messages, streaming) !== null && (
+                  {streamingStatusChip(messages, status) !== null && (
                     <MessageScrollerItem messageId="thinking">
                       <Message align="start">
                         <MessageAvatar>{TUTOR_AVATAR}</MessageAvatar>
@@ -759,7 +798,7 @@ function ChatView({
                           <Bubble variant="muted" align="start">
                             <BubbleContent>
                               <span className="shimmer">
-                                {streamingStatusChip(messages, streaming)}
+                                {streamingStatusChip(messages, status)}
                               </span>
                             </BubbleContent>
                           </Bubble>
@@ -850,12 +889,17 @@ function ChatView({
 }
 
 /** Transient status chip: the latest data-status of the streaming message, pre-text. */
-function streamingStatusChip(messages: VocaUIMessage[], streaming: boolean): string | null {
-  if (!streaming) return null
+function streamingStatusChip(
+  messages: VocaUIMessage[],
+  status: 'submitted' | 'streaming' | 'ready' | 'error',
+): string | null {
+  const waiting = status === 'submitted' || status === 'streaming'
+  if (!waiting) return null
   const last = messages[messages.length - 1]
-  if (!last || last.role === 'user') return null
+  if (!last) return status === 'submitted' ? 'Thinking…' : null
+  if (last.role === 'user') return status === 'submitted' ? 'Thinking…' : null
   if (last.parts.some((part) => part.type === 'text' && part.text.trim())) return null
-  const status = [...last.parts].reverse().find((part) => part.type === 'data-status')
-  if (status && status.type === 'data-status') return status.data.text
+  const dataStatus = [...last.parts].reverse().find((part) => part.type === 'data-status')
+  if (dataStatus && dataStatus.type === 'data-status') return dataStatus.data.text
   return 'Thinking…'
 }

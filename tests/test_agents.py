@@ -495,7 +495,7 @@ def test_planner_untangles_lesson_nested_material_and_missing_title():
             "reason": "r",
         }
     )
-    assert proposal.lesson.title == "Lesson (reading_discussion)"
+    assert proposal.lesson.title == "Reading + Discussion practice"
 
     titled_from_topic = LessonProposal.model_validate(
         {

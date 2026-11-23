@@ -15,7 +15,11 @@ from pydantic_ai import Agent, RunContext
 from voca.services.languages import language_name
 from voca.services.lesson_flow import LessonSpec
 from voca.services.lesson_material import MaterialList
-from voca.services.lesson_templates import template_catalog, template_ids
+from voca.services.lesson_templates import (
+    template_catalog,
+    template_ids,
+    template_name,
+)
 from voca.services.llm import voca_model
 
 
@@ -44,8 +48,9 @@ def _untangle_proposal(value: Any) -> Any:
             if key in lesson and key not in value:
                 lifted[key] = lesson.pop(key)
         if not lesson.get("title"):
+            # End-user-facing copy: template display name, never raw ids.
             lesson["title"] = (
-                lesson.get("topic") or f"Lesson ({lesson.get('template', 'conversation')})"
+                lesson.get("topic") or f"{template_name(lesson.get('template'))} practice"
             )
         value = {**value, "lesson": lesson, **lifted}
     return value

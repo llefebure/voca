@@ -2,7 +2,13 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { LessonMaterial, LessonSummaryCard, ProposalCard } from '@/components/lesson/lesson-components'
+import {
+  LessonDock,
+  LessonMaterial,
+  LessonSummaryCard,
+  LessonThreadBlock,
+  ProposalCard,
+} from '@/components/lesson/lesson-components'
 import type { LessonInstance, MaterialBlock } from '@/lib/lesson-events'
 
 function proposal(): LessonInstance {
@@ -107,5 +113,60 @@ describe('LessonSummaryCard', () => {
     expect(screen.getByText('quisiera')).toBeVisible()
     expect(screen.getByText('la cuenta')).toBeVisible()
     expect(screen.getByText('¿me trae la cuenta?')).toBeVisible()
+  })
+})
+
+describe('LessonDock', () => {
+  it('pins the material with an in-progress label', () => {
+    render(
+      <LessonDock
+        lesson={{
+          ...proposal(),
+          status: 'active',
+          material: [
+            {
+              type: 'scenario',
+              setting: 'a café',
+              learner_role: 'customer',
+              tutor_role: 'barista',
+              goal: 'order',
+            },
+          ],
+        }}
+      />,
+    )
+    expect(screen.getByTestId('lesson-dock')).toBeVisible()
+    expect(screen.getByText(/Lesson in progress/i)).toBeVisible()
+    expect(screen.getByText('a café')).toBeVisible()
+  })
+})
+
+describe('LessonThreadBlock', () => {
+  it('starts collapsed, shows status and bonus count, expands on click', () => {
+    const completed = {
+      ...proposal(),
+      status: 'completed' as const,
+      summary: {
+        headline: 'Ordered with confidence',
+        positives: [],
+        key_phrases: [],
+        bonus_uses: ['Quisiera un cortado.'],
+      },
+    }
+    render(<LessonThreadBlock lesson={{ ...proposal(), status: 'active' }} completed={completed} active />)
+    const block = screen.getByTestId('lesson-thread-block')
+    expect(block.getAttribute('data-status')).toBe('in progress')
+    expect(screen.getByText(/⭐ 1/)).toBeVisible()
+    // Collapsed: material not in the DOM.
+    expect(screen.queryByText('a café') === null || screen.queryByTestId('lesson-material') === null).toBe(true)
+    // Expand: material + summary visible.
+    fireEvent.click(screen.getByRole('button', { name: /Role Play/ }))
+    expect(screen.getByTestId('lesson-material')).toBeVisible()
+    expect(screen.getByTestId('lesson-summary')).toBeVisible()
+  })
+
+  it('marks the lesson as completed after the dock goes away', () => {
+    render(<LessonThreadBlock lesson={proposal()} completed={proposal()} />)
+    expect(screen.getByTestId('lesson-thread-block').getAttribute('data-status')).toBe('completed')
   })
 })

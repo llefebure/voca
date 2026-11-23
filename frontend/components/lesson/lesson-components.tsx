@@ -5,7 +5,17 @@
 // passage is a document card, a dialogue is a script with fill-in gaps), and
 // the end-of-lesson summary with review-credit marks.
 
-import { BookOpenIcon, CheckIcon, InfoIcon, ListIcon, MessageSquareQuoteIcon, SparklesIcon, StarIcon, StickyNoteIcon } from 'lucide-react'
+import {
+  BookOpenIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  InfoIcon,
+  ListIcon,
+  MessageSquareQuoteIcon,
+  SparklesIcon,
+  StarIcon,
+  StickyNoteIcon,
+} from 'lucide-react'
 import * as React from 'react'
 
 import { Badge } from '@/components/ui/badge'
@@ -204,6 +214,16 @@ function Block({
 }
 
 /** The full material of a lesson (banner + blocks), rendered as one card. */
+export function MaterialBlocksList({ blocks }: { blocks: MaterialBlock[] }) {
+  return (
+    <div className="space-y-2">
+      {(blocks ?? []).map((block, index) => (
+        <MaterialBlockView key={index} block={block} />
+      ))}
+    </div>
+  )
+}
+
 export function LessonMaterial({ lesson }: { lesson: LessonInstance }) {
   const spec = lesson.spec
   return (
@@ -219,9 +239,7 @@ export function LessonMaterial({ lesson }: { lesson: LessonInstance }) {
         <CardTitle className="text-base">{spec.title}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
-        {(lesson.material ?? []).map((block, index) => (
-          <MaterialBlockView key={index} block={block} />
-        ))}
+        <MaterialBlocksList blocks={lesson.material} />
       </CardContent>
     </Card>
   )
@@ -285,5 +303,88 @@ export function LessonSummaryCard({ lesson }: { lesson: LessonInstance }) {
         ) : null}
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * The pinned "in the lesson" dock: while a lesson is active its material lives
+ * here, visually distinct from the chat stream below. Collapses naturally away
+ * when the lesson completes (the thread keeps a collapsible record instead —
+ * see `LessonThreadBlock`).
+ */
+export function LessonDock({ lesson }: { lesson: LessonInstance }) {
+  const spec = lesson.spec
+  return (
+    <div
+      className="w-full max-w-[600px] rounded-xl border border-primary/30 bg-card shadow-sm"
+      data-testid="lesson-dock"
+    >
+      <div className="flex items-center gap-2 border-b border-primary/20 px-4 pt-3 pb-2">
+        <span className="relative flex size-2" aria-hidden>
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60" />
+          <span className="relative inline-flex size-2 rounded-full bg-primary" />
+        </span>
+        <span className="text-xs font-medium tracking-wide uppercase text-muted-foreground">
+          Lesson in progress · {lessonTemplateName(spec.template)}
+          {spec.minutes ? ` · ~${spec.minutes} min` : ''}
+        </span>
+      </div>
+      <div className="max-h-[45vh] overflow-y-auto px-4 py-3">
+        <h3 className="text-sm font-medium mb-2">{spec.title}</h3>
+        <MaterialBlocksList blocks={lesson.material} />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The chat-thread record of a lesson: a collapsed bar (title · status · bonus
+ * count) that expands to the material and, once present, the completion
+ * summary. Collapsed while the lesson is docked above; auto-collapses on
+ * completion; expandable at any time afterwards.
+ */
+export function LessonThreadBlock({
+  lesson,
+  completed,
+  active,
+}: {
+  lesson: LessonInstance
+  completed?: LessonInstance | null
+  active?: boolean
+}) {
+  // Collapsed by default: the pinned dock holds the material while the lesson is
+  // in progress, so the thread keeps a tappable record that stays put once the
+  // lesson completes and the dock goes away.
+  const [expanded, setExpanded] = React.useState(false)
+
+  const bonus = (completed?.summary?.bonus_uses ?? []).length
+  const status = active ? 'in progress' : completed ? 'completed' : 'started'
+  return (
+    <div className="w-full max-w-[520px]" data-testid="lesson-thread-block" data-status={status}>
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 rounded-lg border border-primary/20 bg-card/60 px-3 py-2 text-left transition-colors hover:bg-card"
+        onClick={() => setExpanded((prev) => !prev)}
+        aria-expanded={expanded}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <Badge variant="secondary">{lessonTemplateName(lesson.spec.template)}</Badge>
+          <span className="truncate text-sm font-medium">{lesson.spec.title}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+          {bonus > 0 ? <span>⭐ {bonus}</span> : null}
+          <span>{status}</span>
+          <ChevronDownIcon
+            className={`size-4 transition-transform ${expanded ? 'rotate-180' : ''}`}
+          />
+        </span>
+      </button>
+      {expanded ? (
+        <div className="space-y-2 pt-2">
+          <LessonMaterial lesson={lesson} />
+          {completed?.summary ? <LessonSummaryCard lesson={completed} /> : null}
+        </div>
+      ) : null}
+    </div>
   )
 }
