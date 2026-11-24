@@ -32,10 +32,8 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 
 from voca.agents.post_session_agent import CardCandidate, post_session_agent
 from voca.agents.tutor_agent import (
-    PANEL_REPAIR_PROMPT,
     TutorDeps,
     execute_leaked,
-    looks_like_panel_claim,
     parse_tool_leak,
     tutor_agent,
 )
@@ -180,6 +178,38 @@ def fetch_transcript(session_id: str, since: str | None = None) -> list[dict[str
     if since is not None:
         rows = [row for row in rows if (row.get("created_at") or "") >= since]
     return rows
+
+
+def fetch_current_panel(session_id: str) -> dict[str, Any] | None:
+    """The panel currently on the learner's screen, from the transcript's panel
+    events (last `panel_shown`, minus superseding `panel_hidden`).
+
+    This is the same walk the UI performs over the persisted payloads; the
+    backend replays it so the tutor's prompt can carry the panel content and
+    stop re-showing panels that are already visible.
+    """
+    res = (
+        supabase.table("transcripts")
+        .select("payload")
+        .eq("session_id", session_id)
+        .order("created_at")
+        .execute()
+    )
+    current: dict[str, Any] | None = None
+    for row in res.data or []:
+        payload = row.get("payload") or {}
+        if not payload:
+            continue
+        kind = payload.get("kind")
+        if kind == "panel_shown":
+            panel = (payload.get("data") or {}).get("panel")
+            if isinstance(panel, dict) and panel.get("markdown"):
+                current = panel
+        elif kind == "panel_hidden" and current is not None:
+            hidden_id = payload.get("data", {}).get("panel_id") or ""
+            if not hidden_id or hidden_id == current.get("id"):
+                current = None
+    return current
 
 
 async def get_owned_session(session_id: str, user_id: str) -> dict[str, Any]:
@@ -390,12 +420,18 @@ async def build_tutor_deps(
         due_cards = compact_cards(await asyncio.to_thread(fetch_due_cards, user_id, language))
     except Exception:
         logger.exception("due-card fetch failed")
+    try:
+        current_panel = await asyncio.to_thread(fetch_current_panel, session_id)
+    except Exception:
+        logger.exception("current-panel fetch failed")
+        current_panel = None
 
     deps: TutorDeps = {
         "user_id": user_id,
         "session_id": session_id,
         "user_profile": profile,
         "due_cards": due_cards,
+        "current_panel": current_panel,
         "events": events,
         "record_event": record_event,
     }
@@ -419,7 +455,6 @@ async def tutor_frames(
     full_response = ""
     queue = deps["events"]
     producer: asyncio.Task | None = None
-    saw_panel_event = False
     try:
         async with tutor_agent.run_stream(prompt, message_history=history, deps=deps) as result:
 
@@ -485,38 +520,9 @@ async def tutor_frames(
 
             producer = asyncio.ensure_future(consume())
             while (event := await queue.get()) is not None:
-                if event.get("type") == "event" and event.get("kind") == "panel_shown":
-                    saw_panel_event = True
                 yield event
             await producer
             producer = None
-            # Repair pass: the model claimed panel content, but no panel event
-            # reached the stream this turn (verified failure mode: it writes
-            # "He escrito…, léelo en el panel" with no tool call at all). One
-            # non-streaming nudge to actually call the tool; the event and the
-            # short ack flow out to the learner before the stream closes.
-            if not saw_panel_event and looks_like_panel_claim(full_response):
-                try:
-                    repair_history = [
-                        *history,
-                        ModelRequest(parts=[UserPromptPart(content=prompt)]),
-                        ModelResponse(parts=[TextPart(content=full_response)]),
-                    ]
-                    repair = await tutor_agent.run(
-                        PANEL_REPAIR_PROMPT, message_history=repair_history, deps=deps
-                    )
-                    if repair.output.strip():
-                        full_response = f"{full_response}\n\n{repair.output}"
-                        await queue.put({"type": "delta", "text": f"\n\n{repair.output}"})
-                except Exception:
-                    logger.exception("panel repair run failed")
-            # Relay the repair's frames (tool event + ack), then end the stream.
-            await queue.put(None)
-            while True:
-                event = await queue.get()
-                if event is None:
-                    break
-                yield event
     except Exception:
         logger.exception("chat stream failed")
         yield {"type": "error", "message": "The tutor hit an unexpected error. Please try again."}

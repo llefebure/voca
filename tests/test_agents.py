@@ -25,7 +25,6 @@ from voca.agents.tutor_agent import (
     build_panel,
     execute_leaked,
     hide_panel,
-    looks_like_panel_claim,
     parse_tool_leak,
     show_panel,
     tutor_agent,
@@ -67,13 +66,7 @@ async def drained(queue: asyncio.Queue) -> list[dict[str, Any]]:
     return items
 
 
-MENU_BLOCKS = [
-    {
-        "type": "text",
-        "markdown": "| Plato | Precio |\n| :--- | :--- |\n| Tacos | 60 |",
-    },
-    {"type": "questions", "items": ["¿Qué te apetece?"]},
-]
+MENU_MARKDOWN = "| Plato | Precio |\n| :--- | :--- |\n| Tacos | 60 |"
 
 
 # --- Tutor prompts -------------------------------------------------------------------
@@ -107,23 +100,35 @@ def test_prompt_without_due_cards_omits_the_block():
     assert "REVIEW CARDS" not in prompt
 
 
+def test_tutor_prompt_carries_the_current_panel():
+    panel = {"id": "panel-x", "title": "El cuento de Mateo", "markdown": "Un ingeniero…"}
+    prompt = tutor_system_prompt(_StubRunContext(tutor_deps(current_panel=panel)))
+    assert "THE CURRENT PANEL" in prompt and "El cuento de Mateo" in prompt
+    assert "Un ingeniero…" in prompt
+    assert "persists across turns" in prompt and "only to REPLACE" in prompt
+    # A panel in context tightens the rules; without one the prompt stays neutral.
+    plain = tutor_system_prompt(_StubRunContext(tutor_deps()))
+    assert "THE CURRENT PANEL" not in plain
+
+
 # --- show_panel tool -----------------------------------------------------------------
 
 
 async def test_show_panel_tool_pushes_and_persists_event():
     recorded: list[tuple[str, dict]] = []
     deps = tutor_deps(record_event=_record(recorded))
-    result = await show_panel(_StubRunContext(deps), "Carta del día", MENU_BLOCKS)
-    assert "on the learner's screen" in result
+    result = await show_panel(_StubRunContext(deps), "Carta del día", MENU_MARKDOWN)
+    assert "Call accepted" in result
     events = await drained(deps["events"])
     assert events[0] == {"type": "status", "text": "Preparing your panel…"}
     shown = events[1]
     assert shown["type"] == "event" and shown["kind"] == "panel_shown"
     panel = shown["data"]["panel"]
     assert panel["title"] == "Carta del día"
-    assert panel["blocks"][0]["type"] == "text"
+    assert panel["markdown"].startswith("| Plato |")
     assert panel["id"].startswith("panel-")
     assert deps["current_panel_id"] == panel["id"]
+    assert deps["current_panel"] == panel
     assert recorded == [("panel_shown", shown["data"])]
 
 
@@ -134,51 +139,20 @@ def _record(recorded: list) -> Any:
     return record
 
 
-async def test_show_panel_normalizes_untagged_and_aliased_blocks():
-    deps = tutor_deps()
-    await show_panel(
-        _StubRunContext(deps),
-        "Menu",
-        [
-            {"markdown": "**Entradas**\n- sopa"},  # untagged text shape
-            {"rounds": [{"task": "Describe tu rutina"}]},  # aliased tasks shape
-            {"items": ["pan", "queso"]},  # bare items → word bank or questions
-        ],
-    )
-    shown = (await drained(deps["events"]))[1]
-    types = [block["type"] for block in shown["data"]["panel"]["blocks"]]
-    assert types == ["text", "tasks", "word_bank"]
-
-
 async def test_show_panel_decodes_escaped_newlines():
     deps = tutor_deps()
-    await show_panel(
-        _StubRunContext(deps),
-        "Carta",
-        [{"type": "text", "markdown": "**Tacos**\\n\\n| Plato |\\n| :--- |"}],
-    )
+    await show_panel(_StubRunContext(deps), "Carta", "**Tacos**\\n\\n| Plato |\\n| :--- |")
     shown = (await drained(deps["events"]))[1]
-    markdown = shown["data"]["panel"]["blocks"][0]["markdown"]
+    markdown = shown["data"]["panel"]["markdown"]
     assert "\\n" not in markdown and "\n\n" in markdown
 
 
-async def test_show_panel_rejects_when_no_block_is_valid():
+async def test_show_panel_rejects_empty_markdown():
     deps = tutor_deps(record_event=None)
-    result = await show_panel(_StubRunContext(deps), "Menu", [{"nonsense": True}])
-    assert "No valid content blocks" in result
+    result = await show_panel(_StubRunContext(deps), "Menu", "   ")
+    assert "rejected" in result and "empty" in result
     assert [e for e in await drained(deps["events"]) if e["type"] == "event"] == []
     assert "current_panel_id" not in deps
-
-
-async def test_show_panel_tolerates_partial_validity_and_caps_blocks():
-    deps = tutor_deps()
-    blocks = [{"type": "text", "markdown": "hola"}] + [
-        {"type": "junk", "markdown": "x"} for _ in range(12)
-    ]
-    await show_panel(_StubRunContext(deps), "Menu", blocks)
-    shown = (await drained(deps["events"]))[1]
-    assert len(shown["data"]["panel"]["blocks"]) <= 8
-    assert shown["data"]["panel"]["blocks"][0]["type"] == "text"
 
 
 # --- hide_panel tool -----------------------------------------------------------------
@@ -187,7 +161,7 @@ async def test_show_panel_tolerates_partial_validity_and_caps_blocks():
 async def test_hide_panel_closes_the_current_panel():
     recorded: list[tuple[str, dict]] = []
     deps = tutor_deps(record_event=_record(recorded))
-    await show_panel(_StubRunContext(deps), "Menu", MENU_BLOCKS)
+    await show_panel(_StubRunContext(deps), "Menu", MENU_MARKDOWN)
     result = await hide_panel(_StubRunContext(deps))
     assert "hidden" in result
     hidden = (await drained(deps["events"]))[-1]
@@ -210,32 +184,33 @@ async def test_hide_panel_always_pushes_even_without_a_panel():
 # --- build_panel ---------------------------------------------------------------------
 
 
-def test_build_panel_requires_a_block():
-    assert build_panel("Menu", []) is None
-    assert build_panel("", [MENU_BLOCKS[0]])["title"] == "Panel"
+def test_build_panel_rejects_empty_markdown_and_defaults_the_title():
+    assert build_panel("Menu", "   ") is None
+    assert build_panel("", MENU_MARKDOWN)["title"] == "Panel"
 
 
 # --- Leak capture --------------------------------------------------------------------
 
 
 def test_parse_leak_call_shape_with_panel_args():
-    text = 'call:show_panel{title:<|"|>Carta<|"|>, blocks:[{"type":"questions","items":["¿qué?"]}]}'
+    text = 'call:show_panel{title:<|"|>Carta<|"|>, markdown:<|"|>| Plato | 60 |<|"|>}'
     parsed = parse_tool_leak("Hola " + text)
     assert parsed is not None
     before, name, args, _consumed = parsed
     assert before == "Hola "
     assert name == "show_panel"
     assert args["title"] == "Carta"
-    assert args["blocks"][0]["type"] == "questions"
+    assert args["markdown"] == "| Plato | 60 |"
 
 
 def test_parse_leak_tool_code_shape():
-    text = '<tool_code>show_panel(title="Carta", blocks=[{"type": "text", "markdown": "hola"}])</tool_code>'
+    text = '<tool_code>show_panel(title="Carta", markdown="| Plato | 60 |")</tool_code>'
     parsed = parse_tool_leak(text)
     assert parsed is not None
     _before, name, args, _consumed = parsed
     assert name == "show_panel"
     assert args["title"] == "Carta"
+    assert args["markdown"] == "| Plato | 60 |"
 
 
 def test_parse_leak_hide_panel_tolerates_empty_args():
@@ -254,31 +229,17 @@ async def test_execute_leaked_runs_the_real_show_panel():
     deps = tutor_deps()
     await execute_leaked(
         "show_panel",
-        {"title": "Carta", "blocks": MENU_BLOCKS},
+        {"title": "Carta", "markdown": MENU_MARKDOWN},
         deps,
     )
     events = await drained(deps["events"])
     assert events[-1]["kind"] == "panel_shown"
     assert events[-1]["data"]["panel"]["title"] == "Carta"
+    assert deps["current_panel"] == events[-1]["data"]["panel"]
 
 
 async def test_execute_leaked_ignores_unknown_tools():
     await execute_leaked("propose_lesson", {"idea": "x"}, tutor_deps())  # must not raise
-
-
-# --- Claimed-but-never-shown repair --------------------------------------------------
-
-
-def test_claim_detector_matches_promises_only():
-    """Pointer phrases in short replies; long content dumps do not count."""
-    assert looks_like_panel_claim(
-        "He escrito un cuento corto para ti sobre Mateo. Puedes leer la historia en el panel."
-    )
-    assert looks_like_panel_claim("I've written the menu — check the panel now.")
-    assert looks_like_panel_claim("Mira el panel para ver la carta.")
-    assert not looks_like_panel_claim("¡Hola! Todo bien, gracias. ¿Qué hiciste hoy?")
-    # The model wrote the content into chat: the repair would be pointless.
-    assert not looks_like_panel_claim("en el panel " + "palabra " * 400)
 
 
 # --- Agent-level behavior (TestModel) ------------------------------------------------

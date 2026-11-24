@@ -60,13 +60,13 @@ async def test_tutor_shows_menu_panel_when_role_playing_a_restaurant():
     The model's tool-calling is stochastic, so the prompt retries once with a
     blunter ask if the first turn produced no panel.
     """
+
     async def record_event(kind, data):
         pass
 
     deps = tutor_deps(record_event=record_event)
     prompts = [
-        "Estoy sentado en un restaurante mexicano y me has dado la carta. "
-        "Enséñamela, por favor.",
+        "Estoy sentado en un restaurante mexicano y me has dado la carta. Enséñamela, por favor.",
         "Muéstrame la carta en el panel, por favor.",
     ]
     for prompt in prompts:

@@ -13,7 +13,7 @@ const seed = vi.hoisted(() => ({
       created_at: '2026-03-01T10:00:05Z',
       payload: {
         kind: 'panel_shown',
-        data: { panel: { id: 'panel-1', title: 'Carta del día', blocks: [{ type: 'text', markdown: '**Menú**' }] } },
+        data: { panel: { id: 'panel-1', title: 'Carta del día', markdown: '**Menú**' } },
       },
     },
     { speaker: 'tutor', text: 'Aquí tienes la carta.', created_at: '2026-03-01T10:00:10Z' },
@@ -27,7 +27,7 @@ const seed = vi.hoisted(() => ({
           panel: {
             id: 'panel-2',
             title: 'Diálogo',
-            blocks: [{ type: 'questions', items: ['¿Qué pides?'] }],
+            markdown: '1. ¿Qué pides?',
           },
         },
       },

@@ -273,7 +273,9 @@ async def test_end_session_skips_not_attempted_cards(client, fake_supabase, monk
     assert response.status_code == 200
     recap = response.json()["recap"]
     # The scorecard includes not_attempted as a null rating (list entry, no log).
-    assert recap["reviewed_cards"] == [{"front": "quisiera", "back": "I would like", "rating": None}]
+    assert recap["reviewed_cards"] == [
+        {"front": "quisiera", "back": "I would like", "rating": None}
+    ]
     assert fake_supabase.inserted_rows("cards") == []
     # Only the completion update plus the recap write happened; no card/profile updates.
     assert fake_supabase.updated_rows("cards") == []

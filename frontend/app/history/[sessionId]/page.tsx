@@ -9,7 +9,8 @@ import { ArrowRight, Lock, FileX, MessageSquare, PanelRightIcon } from 'lucide-r
 import { format } from 'date-fns'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
-import { PanelBlocksList } from '@/components/panel/panel-components'
+import { Markdown } from '@/components/markdown'
+import { displayPanel } from '@/components/panel/panel-components'
 import type { PanelInstance } from '@/lib/panel-events'
 import { cleanEscapedText } from '@/lib/panel-events'
 import { cn } from '@/lib/utils'
@@ -40,7 +41,8 @@ function walkTranscripts(
     if (row.speaker === 'system' && payload?.kind) {
       if (payload.kind === 'panel_shown') {
         const panel = cleanEscapedText((payload.data as { panel?: PanelInstance }).panel)
-        if (panel?.id) panels.set(panel.id, panel)
+        // Markdown-only panels; ignore legacy content shapes.
+        if (panel?.id && typeof panel.markdown === 'string') panels.set(panel.id, panel)
       }
       // panel_hidden rows are walk bookkeeping; the artifact itself stays a tab.
       continue
@@ -115,7 +117,7 @@ function ArtifactTabs({
       {active ? (
         <div className="flex max-h-[65vh] min-h-0 flex-1 flex-col rounded-xl border border-primary/30 bg-card shadow-sm">
           <div className="flex-1 overflow-y-auto px-4 py-3">
-            <PanelBlocksList blocks={active.blocks} />
+            <Markdown className="prose-invert-none">{displayPanel(active).markdown}</Markdown>
           </div>
         </div>
       ) : null}

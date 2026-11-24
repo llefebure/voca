@@ -2,18 +2,11 @@
 // components. Mirrors the backend's panel content primitives
 // (services/panel_content.py) — keep in sync.
 
-export type PanelBlock =
-  | { type: 'scenario'; setting: string; learner_role: string; tutor_role: string; goal: string }
-  | { type: 'text'; title?: string | null; markdown: string }
-  | { type: 'dialogue'; turns: { speaker: 'tutor' | 'learner'; text: string }[] }
-  | { type: 'questions'; items: string[] }
-  | { type: 'tasks'; items: { task: string; hint?: string | null }[] }
-  | { type: 'word_bank'; items: string[] }
-
 export type PanelInstance = {
   id: string
   title: string
-  blocks: PanelBlock[]
+  /** The panel's content, composed by the tutor directly in markdown. */
+  markdown: string
 }
 
 /**

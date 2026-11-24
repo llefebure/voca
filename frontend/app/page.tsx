@@ -221,7 +221,8 @@ function ChatView({
     let current: PanelInstance | null = null
     for (const { part } of entries) {
       if (part.type === 'data-panel_shown') {
-        current = cleanEscapedText(part.data.panel)
+        const panel = cleanEscapedText(part.data.panel)
+        if (typeof panel.markdown === 'string') current = panel
       } else if (part.type === 'data-panel_hidden' && current) {
         // The tutor's hide targets whatever is showing: an empty or matching id.
         const hiddenId = part.data.panel_id

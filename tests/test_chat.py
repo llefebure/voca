@@ -56,30 +56,6 @@ class ToolEventTutorAgent(FakeTutorAgent):
         yield FakeStreamResult(self.chunks)
 
 
-class ClaimRepairTutorAgent(FakeTutorAgent):
-    """A fake tutor that claims a panel in its stream (no event) and repairs
-    when the pump's second `tutor_agent.run` pass asks it to make the call."""
-
-    def __init__(self, chunks: list[str]) -> None:
-        super().__init__(chunks)
-        self.run_prompts: list[str | None] = []
-
-    @contextlib.asynccontextmanager
-    async def run_stream(self, _prompt, deps=None, **_kwargs: Any):
-        yield FakeStreamResult(self.chunks)
-
-    async def run(self, prompt, deps=None, message_history=None):
-        self.run_prompts.append(prompt)
-        await deps["events"].put(
-            {
-                "type": "event",
-                "kind": "panel_shown",
-                "data": {"panel": {"id": "panel-r", "title": "El cuento", "blocks": []}},
-            }
-        )
-        return type("R", (), {"output": "Ya está en el panel — dale una mirada."})()
-
-
 def active_session_response(**overrides) -> dict[str, Any]:
     row = {"id": "sess-1", "user_id": "user-1", "status": "active", "language": "es"}
     row.update(overrides)
@@ -267,7 +243,7 @@ async def test_chat_pumps_tool_events_into_the_stream(client, monkeypatch, fake_
     panel = {
         "id": "panel-1",
         "title": "Carta del día",
-        "blocks": [{"type": "text", "markdown": "| Plato |\n| :--- |\n| Tacos |"}],
+        "markdown": "| Plato |\n| :--- |\n| Tacos |",
     }
     monkeypatch.setattr(
         voca_main,
@@ -375,7 +351,7 @@ async def test_chat_captures_leaked_tool_call_into_a_real_event(client, monkeypa
 
     leak = (
         '¡Qué picante! call:show_panel{title:<|"|>La ciencia del picante<|"|>, '
-        'blocks:[{"type":"questions","items":["¿Qué tan picante te gusta?"]}]}<tool_call|>'
+        'markdown:<|"|>1. ¿Qué tan picante te gusta?<|"|>}<tool_call|>'
     )
     monkeypatch.setattr(voca_main, "tutor_agent", LeakyTutorAgent([leak]))
 
@@ -389,7 +365,7 @@ async def test_chat_captures_leaked_tool_call_into_a_real_event(client, monkeypa
     assert structured and structured[0]["kind"] == "panel_shown"
     panel = structured[0]["data"]["panel"]
     assert panel["title"] == "La ciencia del picante"
-    assert panel["blocks"][0]["type"] == "questions"
+    assert "picante" in panel["markdown"]
     # The leaked call syntax never reaches the visible chat.
     deltas = "".join(event["text"] for event in events if event["type"] == "delta")
     assert "call:show_panel" not in deltas
@@ -419,105 +395,13 @@ async def test_chat_leak_without_tool_match_stays_visible_text(client, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_chat_captures_tool_code_leak(client, monkeypatch, fake_supabase):
-    """The `<tool_code>show_panel(...)</tool_code>` shape becomes an event."""
-    fake_supabase.results[("sessions", "select")] = [active_session_response()]
-    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
-    fake_supabase.results[("cards", "select")] = []
-
-    leak = '<tool_code>\nshow_panel(title="Carta", blocks=[{"type": "text", "markdown": "hola"}])\n</tool_code>\n'
-    monkeypatch.setattr(voca_main, "tutor_agent", LeakyTutorAgent([leak]))
-
-    response = await client.post(
-        "/chat", json={"message": "hola", "session_id": "sess-1"}, headers=AUTH
-    )
-    events = sse_events(response.text)
-    structured = [event for event in events if event["type"] == "event"]
-    assert structured and structured[0]["kind"] == "panel_shown"
-    assert structured[0]["data"]["panel"]["title"] == "Carta"
-    deltas = "".join(event["text"] for event in events if event["type"] == "delta")
-    assert "tool_code" not in deltas and "show_panel(" not in deltas
-
-
-@pytest.mark.asyncio
-async def test_chat_repairs_a_claimed_but_missing_panel(client, monkeypatch, fake_supabase):
-    """The model wrote 'I've written it, read it on the panel' with no tool call:
-    the pump runs one repair pass and the panel + ack still reach the learner."""
-    fake_supabase.results[("sessions", "select")] = [active_session_response()]
-    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
-    fake_supabase.results[("cards", "select")] = []
-
-    tutor = ClaimRepairTutorAgent(
-        ["He escrito un cuento sobre Mateo. Puedes leerlo en el panel de la derecha."]
-    )
-    monkeypatch.setattr(voca_main, "tutor_agent", tutor)
-
-    response = await client.post(
-        "/chat", json={"message": "escríbeme una historia corta", "session_id": "sess-1"}, headers=AUTH
-    )
-    events = sse_events(response.text)
-    structured = [event for event in events if event["type"] == "event"]
-    assert structured and structured[0]["kind"] == "panel_shown"
-    assert structured[0]["data"]["panel"]["id"] == "panel-r"
-    # The repair ran with the meta prompt, after the claim turn.
-    assert tutor.run_prompts == [voca_main.PANEL_REPAIR_PROMPT]
-    # The ack lands in the visible stream after the repaired event.
-    deltas = "".join(event["text"] for event in events if event["type"] == "delta")
-    assert "Ya está en el panel" in deltas
-
-
-@pytest.mark.asyncio
-async def test_chat_no_repair_when_the_panel_actually_showed(client, monkeypatch, fake_supabase):
-    """A reply that DID push a panel event never triggers the repair pass."""
-    fake_supabase.results[("sessions", "select")] = [active_session_response()]
-    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
-    fake_supabase.results[("cards", "select")] = []
-
-    panel = {"id": "panel-1", "title": "Carta", "blocks": [{"type": "text", "markdown": "m"}]}
-    tutor = ToolEventTutorAgent(
-        ["Ahí lo tienes en el panel. ¿Qué te apetece?"],
-        [{"type": "event", "kind": "panel_shown", "data": {"panel": panel}}],
-    )
-    monkeypatch.setattr(voca_main, "tutor_agent", tutor)
-
-    response = await client.post(
-        "/chat", json={"message": "el menú", "session_id": "sess-1"}, headers=AUTH
-    )
-    events = sse_events(response.text)
-    kinds = [event["kind"] for event in events if event["type"] == "event"]
-    assert kinds == ["panel_shown"]
-    deltas = "".join(event["text"] for event in events if event["type"] == "delta")
-    assert "Ya está en el panel" not in deltas
-
-
-@pytest.mark.asyncio
-async def test_chat_no_repair_for_innocent_replies(client, monkeypatch, fake_supabase):
-    """Casual chat that merely mentions nothing panel-like never re-runs the agent."""
-    fake_supabase.results[("sessions", "select")] = [active_session_response()]
-    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
-    fake_supabase.results[("cards", "select")] = []
-
-    tutor = ClaimRepairTutorAgent(["¡Hola! Todo bien, ¿y tú qué tal?"])
-    monkeypatch.setattr(voca_main, "tutor_agent", tutor)
-
-    response = await client.post(
-        "/chat", json={"message": "¿qué tal?", "session_id": "sess-1"}, headers=AUTH
-    )
-    assert tutor.run_prompts == []
-    deltas = "".join(
-        event["text"] for event in sse_events(response.text) if event["type"] == "delta"
-    )
-    assert "¡Hola!" in deltas
-
-
-@pytest.mark.asyncio
 async def test_chat_hide_panel_leak_hides_the_panel(client, monkeypatch, fake_supabase):
     """A leaked hide_panel call closes the panel: panel_hidden event, panel_id kept."""
     fake_supabase.results[("sessions", "select")] = [active_session_response()]
     fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
     fake_supabase.results[("cards", "select")] = []
 
-    leak = '<tool_code>show_panel(title="Carta", blocks=[{"type": "text", "markdown": "hola"}])</tool_code>'
+    leak = '<tool_code>show_panel(title="Carta", markdown="hola")</tool_code>'
     leak2 = "<tool_code>hide_panel()</tool_code>"
     monkeypatch.setattr(voca_main, "tutor_agent", LeakyTutorAgent([leak, leak2]))
 

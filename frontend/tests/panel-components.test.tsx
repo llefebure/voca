@@ -1,12 +1,9 @@
+import * as React from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import {
-  PanelBlocksList,
-  PanelCanvas,
-  PanelRecord,
-} from '@/components/panel/panel-components'
-import type { PanelBlock, PanelInstance } from '@/lib/panel-events'
+import { PanelCanvas, PanelRecord } from '@/components/panel/panel-components'
+import type { PanelInstance } from '@/lib/panel-events'
 import { cleanEscapedText } from '@/lib/panel-events'
 
 afterEach(cleanup)
@@ -17,53 +14,28 @@ function menuPanel(overrides: Partial<PanelInstance> = {}): PanelInstance {
   return {
     id: 'panel-abc123',
     title: 'Carta del día',
-    blocks: [{ type: 'text', markdown: MENU_MD } as PanelBlock],
+    markdown: MENU_MD,
     ...overrides,
   }
 }
 
-describe('PanelBlocksList', () => {
-  it('renders each block type with its distinct treatment', () => {
-    render(
-      <PanelBlocksList
-        blocks={[
-          { type: 'scenario', setting: 'A café', learner_role: 'customer', tutor_role: 'barista', goal: 'order' },
-          { type: 'text', markdown: MENU_MD },
-          { type: 'dialogue', turns: [{ speaker: 'tutor', text: '¡Buenas!' }, { speaker: 'learner', text: '' }] },
-          { type: 'questions', items: ['¿Qué te apetece?'] },
-          { type: 'tasks', items: [{ task: 'Pide la cuenta', hint: 'la cuenta' }] },
-          { type: 'word_bank', items: ['un cortado'] },
-        ]}
-      />,
-    )
-    expect(screen.getByText('A café')).toBeVisible()
-    expect(screen.getByTestId('dialogue-gap')).toBeVisible()
-    expect(screen.getByText('¿Qué te apetece?')).toBeVisible()
-    expect(screen.getByText('Pide la cuenta')).toBeVisible()
-    expect(screen.getByText('un cortado')).toBeVisible()
-    // The markdown table from the menu renders as a real <table>.
-    expect(screen.getAllByRole('table').length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('decodes stored literal escapes before rendering markdown', () => {
-    render(
-      <PanelBlocksList
-        blocks={[{ type: 'text', markdown: '**Tacos**\\n\\n| Plato |\\n| :--- |' } as PanelBlock]}
-      />,
-    )
-    // The literal sequence never reaches the DOM: the table renders.
-    expect(screen.getByRole('table')).toBeVisible()
-  })
-})
-
 describe('PanelCanvas', () => {
-  it('shows the panel title and content, with a working close button', () => {
+  it('renders the panel markdown as a real table, with a working close button', () => {
     const onClose = vi.fn()
     render(<PanelCanvas panel={menuPanel()} onClose={onClose} />)
     expect(screen.getByTestId('panel-canvas')).toBeVisible()
     expect(screen.getByText('Carta del día')).toBeVisible()
+    expect(screen.getByRole('table')).toBeVisible()
     fireEvent.click(screen.getByTestId('panel-close'))
     expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('decodes stored literal escapes before rendering', () => {
+    render(
+      <PanelCanvas panel={{ ...menuPanel(), markdown: '**Tacos**\\n\\n| Plato |\\n| :--- |' }} />,
+    )
+    // The literal sequence never reaches the DOM: the table renders.
+    expect(screen.getByRole('table')).toBeVisible()
   })
 
   it('omits the close button when the canvas is not dismissible', () => {
@@ -73,11 +45,12 @@ describe('PanelCanvas', () => {
 })
 
 describe('PanelRecord', () => {
-  it('collapses by default and expands to the content on click', () => {
+  it('collapses by default and expands to the markdown content on click', () => {
     render(<PanelRecord panel={menuPanel()} />)
     expect(screen.queryByText('La Carta')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /Carta del día/ }))
     expect(screen.getByText('La Carta')).toBeVisible()
+    expect(screen.getByRole('table')).toBeVisible()
   })
 })
 

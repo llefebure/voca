@@ -41,6 +41,7 @@ def test_review_card_state_returns_the_log():
     # The returned state is the same as the state-only helper produces.
     assert json.loads(new_state)["last_review"] == review_time.isoformat()
 
+
 def test_malformed_state_falls_back_to_a_fresh_card():
     """Seeded/partial fsrs_data must never break the review path."""
     partial = json.dumps({"state": 1, "step": 0})  # missing card_id etc.
