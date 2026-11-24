@@ -15,13 +15,17 @@ per-lesson credit UI (no ⭐ marks).
   calls a tool and the UI pops a canvas panel on the right (split view: chat
   left, panel right). The chat itself stays whole — panels are exhibits, not a
   separate conversation stream.
-- **`show_panel` tool** (tutor agent): `title` + typed content blocks (the
-  six primitives kept from the lesson work: scenario / text / dialogue /
-  questions / tasks / word_bank, in `services/panel_content.py`). Blocks are
-  normalized and validated defensively (invalid shapes coerce or drop; the
-  model gets a corrective ack when nothing valid remains). Emits the SSE event
-  `panel_shown {panel: {id, title, blocks}}`, persisted as a
+- **`show_panel` tool** (tutor agent): `title` + one markdown string — the
+  model composes lists/tables/whatever directly (no content types). The tool
+  escape-decodes gemma's string args and rejects empty markdown. Emits the
+  SSE event `panel_shown {panel: {id, title, markdown}}`, persisted as a
   `transcripts.payload` row for restore.
+- **Panel state in the agent**: `fetch_current_panel` replays the transcript's
+  panel events per turn and the prompt carries the current panel's title +
+  markdown ("persists across turns — do not re-call show_panel for the same
+  content"), so the agent reads its own artifact instead of regenerating it.
+  Prompt rules: never claim content without calling the tool in the same
+  reply; never name the panel's position ('just el panel').
 - **`hide_panel` tool**: closes the currently shown panel (event
   `panel_hidden {panel_id}`). The user's ✕ on the canvas is a client-side
   dismissal only — panels in history never disappear.
