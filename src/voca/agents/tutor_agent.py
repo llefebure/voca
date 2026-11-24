@@ -48,6 +48,10 @@ tutor_agent = Agent(
     model=voca_model,
     deps_type=TutorDeps,
     tools=[],
+    # Panel blocks stream as large tool-args JSON that gemma occasionally
+    # mangles; three tool-retry passes (with the validation error as feedback)
+    # recover most of them. One retry 500s the whole turn instead.
+    retries=3,
 )
 
 
@@ -79,17 +83,25 @@ def tutor_system_prompt(ctx: RunContext[TutorDeps]) -> str:
         "or small-talk turns.\n\n",
         "REVIEW WORDS: work the due cards below in naturally when the topic touches "
         "them; mention it warmly if the learner uses one well.\n\n",
-        "SIDE PANEL: you have a canvas panel on the right of the learner's screen "
-        "(they see it as a split view next to your chat). Use `show_panel` whenever "
-        "structured content genuinely helps the conversation — a menu you are "
-        "role-playing from, an opening-hours table, a dialogue script to study, "
-        "comprehension questions, a word bank, practice tasks. Keep the panel's "
-        "content OUT of your chat turns: point at it ('look at the menu on the "
-        "right') and ask about it. When the content changes materially, show a NEW "
-        "panel (it replaces the old); when the learner asks you to remove or close "
-        "the panel, or the content is clearly no longer useful, you MUST call "
-        "`hide_panel` — never merely SAY you removed it. Do not stack a panel on "
-        "small talk that does not need one.\n",
+        "SIDE PANEL: you have a canvas panel next to the learner's chat. Use "
+        "`show_panel` whenever structured content genuinely helps the conversation "
+        "— a menu you are role-playing from, a text to read, a dialogue script to "
+        "study, comprehension questions, a word bank, practice tasks. Keep the "
+        "panel's content OUT of your chat turns: point at it ('mira el panel') and "
+        "ask about it. When the content changes materially, show a NEW panel (it "
+        "replaces the old); when the learner asks you to remove or close the panel, "
+        "or the content is clearly no longer useful, you MUST call `hide_panel` — "
+        "never merely SAY you removed it. Do not stack a panel on small talk that "
+        "does not need one.\n\n",
+        "TWO HARD RULES ABOUT THE PANEL:\n"
+        "1. NEVER NAME ITS POSITION. Its placement changes with the device and "
+        "screen layout — never say 'el panel de la derecha', 'a la derecha', 'on "
+        "the right side' or any other location. Always say just 'el panel' / 'the "
+        "panel'.\n"
+        "2. NEVER CLAIM WITHOUT CALLING. Do not say 'He escrito…', 'Puedes leer…', "
+        "'lo ves en el panel' or anything similar unless you actually called "
+        "`show_panel` in THIS reply with that content. If you promise content, "
+        "the call happens in the same reply — no exceptions.\n\n",
     ]
     due = deps.get("due_cards", [])
     if due:
@@ -149,8 +161,10 @@ async def show_panel(ctx: RunContext[TutorDeps], title: str, blocks: list[dict[s
     deps["current_panel_id"] = panel["id"]
     await _push_event(deps, "panel_shown", {"panel": panel})
     return (
-        "The panel is on the learner's screen (right side). Do not repeat its "
-        "contents in chat — point at it and converse about it."
+        "The panel now shows the content on the learner's screen, next to the "
+        "chat. Refer to it as just 'the panel' (never a screen side or position) "
+        "and do not repeat its contents in chat — point at it and converse about "
+        "it."
     )
 
 
@@ -345,3 +359,41 @@ class _LeakRunContext:
 
     def __init__(self, deps: TutorDeps) -> None:
         self.deps = deps
+
+
+# --- Claimed-but-never-shown repair -------------------------------------------------
+#
+# Verified live: the model sometimes WRITES that it put content on the panel
+# ("He escrito un cuento…, puedes leerlo en el panel") without calling
+# show_panel at all; the learner then has to ask "I don't see it". The pump
+# detects that claim pattern in a reply that produced no panel event and runs
+# one non-streaming repair turn: the agent must call show_panel for real.
+
+_CLAIM_RE = re.compile(
+    r"(?i)(?:\bhe (?:escrito|preparado|creado|puesto|generado|enviado)\b"
+    r"|\bescrib[ií]\b"
+    r"|(?:mira|revisa|consulta|abre)\s+(?:el\s+)?panel"
+    r"|(?:puedes|puedo|ya puedes)\s+(?:ver|leer)\b"
+    r"|\ben el panel\b"
+    r"|\bon the panel\b"
+    r"|\bi'?ve (?:written|created|prepared|put|generated)\b)"
+)
+
+# A claim reply is a short pointer, not a content dump; if the model actually
+# wrote the content into chat, the repair would be pointless.
+_CLAIM_MAX_LEN = 1200
+
+PANEL_REPAIR_PROMPT = (
+    "(SYSTEM CHECK, never shown verbatim to the student) Your previous message "
+    "told the student to read content on the panel, but no panel was ever shown "
+    "— the student sees nothing. Call `show_panel` NOW with exactly the content "
+    "you promised (the same story/menu/text). Do not apologize at length and do "
+    "not paste the content into chat: one call to `show_panel`, then a single "
+    "short line inviting the student to read it. Remember: just 'el panel', "
+    "never its position."
+)
+
+
+def looks_like_panel_claim(text: str) -> bool:
+    """True when the reply promises panel content in a short pointer message."""
+    return len(text) <= _CLAIM_MAX_LEN and _CLAIM_RE.search(text) is not None

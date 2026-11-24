@@ -25,6 +25,7 @@ from voca.agents.tutor_agent import (
     build_panel,
     execute_leaked,
     hide_panel,
+    looks_like_panel_claim,
     parse_tool_leak,
     show_panel,
     tutor_agent,
@@ -263,6 +264,21 @@ async def test_execute_leaked_runs_the_real_show_panel():
 
 async def test_execute_leaked_ignores_unknown_tools():
     await execute_leaked("propose_lesson", {"idea": "x"}, tutor_deps())  # must not raise
+
+
+# --- Claimed-but-never-shown repair --------------------------------------------------
+
+
+def test_claim_detector_matches_promises_only():
+    """Pointer phrases in short replies; long content dumps do not count."""
+    assert looks_like_panel_claim(
+        "He escrito un cuento corto para ti sobre Mateo. Puedes leer la historia en el panel."
+    )
+    assert looks_like_panel_claim("I've written the menu — check the panel now.")
+    assert looks_like_panel_claim("Mira el panel para ver la carta.")
+    assert not looks_like_panel_claim("¡Hola! Todo bien, gracias. ¿Qué hiciste hoy?")
+    # The model wrote the content into chat: the repair would be pointless.
+    assert not looks_like_panel_claim("en el panel " + "palabra " * 400)
 
 
 # --- Agent-level behavior (TestModel) ------------------------------------------------

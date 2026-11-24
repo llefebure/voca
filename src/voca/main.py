@@ -32,8 +32,10 @@ from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserProm
 
 from voca.agents.post_session_agent import CardCandidate, post_session_agent
 from voca.agents.tutor_agent import (
+    PANEL_REPAIR_PROMPT,
     TutorDeps,
     execute_leaked,
+    looks_like_panel_claim,
     parse_tool_leak,
     tutor_agent,
 )
@@ -417,6 +419,7 @@ async def tutor_frames(
     full_response = ""
     queue = deps["events"]
     producer: asyncio.Task | None = None
+    saw_panel_event = False
     try:
         async with tutor_agent.run_stream(prompt, message_history=history, deps=deps) as result:
 
@@ -482,9 +485,38 @@ async def tutor_frames(
 
             producer = asyncio.ensure_future(consume())
             while (event := await queue.get()) is not None:
+                if event.get("type") == "event" and event.get("kind") == "panel_shown":
+                    saw_panel_event = True
                 yield event
             await producer
             producer = None
+            # Repair pass: the model claimed panel content, but no panel event
+            # reached the stream this turn (verified failure mode: it writes
+            # "He escrito…, léelo en el panel" with no tool call at all). One
+            # non-streaming nudge to actually call the tool; the event and the
+            # short ack flow out to the learner before the stream closes.
+            if not saw_panel_event and looks_like_panel_claim(full_response):
+                try:
+                    repair_history = [
+                        *history,
+                        ModelRequest(parts=[UserPromptPart(content=prompt)]),
+                        ModelResponse(parts=[TextPart(content=full_response)]),
+                    ]
+                    repair = await tutor_agent.run(
+                        PANEL_REPAIR_PROMPT, message_history=repair_history, deps=deps
+                    )
+                    if repair.output.strip():
+                        full_response = f"{full_response}\n\n{repair.output}"
+                        await queue.put({"type": "delta", "text": f"\n\n{repair.output}"})
+                except Exception:
+                    logger.exception("panel repair run failed")
+            # Relay the repair's frames (tool event + ack), then end the stream.
+            await queue.put(None)
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield event
     except Exception:
         logger.exception("chat stream failed")
         yield {"type": "error", "message": "The tutor hit an unexpected error. Please try again."}
