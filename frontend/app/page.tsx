@@ -558,32 +558,45 @@ function ChatView({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col px-8">
+      {/* The content region splits into two flush rectangles when a panel is
+          showing: the chat pane and the canvas pane together fill the full
+          rectangle (divider line between them), rather than the panel floating
+          inside the chat column. */}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {activePanel ? (
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-6 md:grid-cols-[minmax(0,1fr)_400px]">
-            <MessageThread entries={entries} status={status} />
-            <PanelCanvas
-              panel={activePanel}
-              onClose={() =>
-                setDismissedPanelIds((prev) => new Set([...prev, activePanel.id]))
-              }
-            />
-          </div>
+          <>
+            <div className="flex min-h-0 flex-1 flex-col px-8">
+              <MessageThread entries={entries} status={status} />
+            </div>
+            <div className="flex min-h-[45vh] w-full shrink-0 flex-col border-t bg-card md:h-full md:w-[420px] md:border-t-0 md:border-l">
+              <PanelCanvas
+                panel={activePanel}
+                flush
+                onClose={() =>
+                  setDismissedPanelIds((prev) => new Set([...prev, activePanel.id]))
+                }
+              />
+            </div>
+          </>
         ) : messages.length === 0 ? (
-          <Empty className="flex-1">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <LanguagesIcon />
-              </EmptyMedia>
-              <EmptyTitle>Ready to practice?</EmptyTitle>
-              <EmptyDescription>
-                Start a conversation in {languageName(targetLanguage)} — chat casually, and your
-                tutor will put menus, scripts, or exercises on the side panel whenever they help.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
+          <div className="flex min-h-0 flex-1 flex-col px-8">
+            <Empty className="flex-1">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <LanguagesIcon />
+                </EmptyMedia>
+                <EmptyTitle>Ready to practice?</EmptyTitle>
+                <EmptyDescription>
+                  Start a conversation in {languageName(targetLanguage)} — chat casually, and your
+                  tutor will put menus, scripts, or exercises on the side panel whenever they help.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          </div>
         ) : (
-          <MessageThread entries={entries} status={status} />
+          <div className="flex min-h-0 flex-1 flex-col px-8">
+            <MessageThread entries={entries} status={status} />
+          </div>
         )}
       </div>
 

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/markdown'
 import type { PanelInstance } from '@/lib/panel-events'
 import { cleanEscapedText } from '@/lib/panel-events'
+import { cn } from '@/lib/utils'
 
 /** Normalizes a panel for display: escape sequences decode before rendering. */
 export function displayPanel(panel: PanelInstance): PanelInstance {
@@ -18,18 +19,36 @@ export function displayPanel(panel: PanelInstance): PanelInstance {
 }
 
 /**
- * The canvas: the right half of the split view while a panel is showing.
- * The chat keeps flowing on the left; the ✕ dismisses the split view (the
- * panel's chat record stays).
+ * The canvas: the side pane of the split view while a panel is showing. The
+ * chat keeps flowing next to it; the ✕ dismisses the split view (the panel's
+ * chat record stays). `flush` renders the pane edge-to-edge for the full-bleed
+ * two-rectangle split (the parent carries the divider); the default is a
+ * self-contained card.
  */
-export function PanelCanvas({ panel, onClose }: { panel: PanelInstance; onClose?: () => void }) {
+export function PanelCanvas({
+  panel,
+  onClose,
+  flush = false,
+}: {
+  panel: PanelInstance
+  onClose?: () => void
+  flush?: boolean
+}) {
   const display = displayPanel(panel)
   return (
     <div
-      className="flex max-h-full min-h-0 flex-col rounded-xl border border-primary/30 bg-card shadow-sm"
+      className={cn(
+        'flex min-h-0 flex-1 flex-col',
+        flush ? '' : 'max-h-full rounded-xl border border-primary/30 bg-card shadow-sm',
+      )}
       data-testid="panel-canvas"
     >
-      <div className="flex items-center gap-2 border-b border-primary/20 px-4 pt-3 pb-2">
+      <div
+        className={cn(
+          'flex items-center gap-2 border-b border-primary/20',
+          flush ? 'py-2.5 pl-4 pr-3' : 'pt-3 pb-2 px-4',
+        )}
+      >
         <PanelRightIcon className="text-primary size-3.5" />
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="truncate text-sm font-medium">{display.title}</span>
