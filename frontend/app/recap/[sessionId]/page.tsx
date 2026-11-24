@@ -1,13 +1,26 @@
 'use client'
 
-import { useState, useEffect, use, Suspense } from 'react'
+import { useState, useEffect, use, Suspense, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useRouter } from 'next/navigation'
-import { CheckCircle, XCircle, BookOpen, ArrowRight, TrendingUp, Target } from 'lucide-react'
+import {
+  ArrowRight,
+  BookOpen,
+  CheckCircle,
+  CircleAlert,
+  CircleCheck,
+  CircleCheckBig,
+  CircleMinus,
+  CircleX,
+  TrendingUp,
+  Target,
+  XCircle,
+} from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 type RecapData = {
   positives?: string[]
@@ -16,6 +29,37 @@ type RecapData = {
   user_word_count?: number
   // The analyst's new cards for this session (always present; empty when none).
   new_cards?: { type: string; front: string; back: string }[]
+  // The review scorecard: FSRS rating per reviewed word (4=Easy, 3=Good, 2=Hard,
+  // 1=Again, null=not attempted). Bare icons; the rating text is on hover.
+  reviewed_cards?: { front: string; back: string; rating: number | null }[]
+}
+
+// FSRS rating → bare icon; the rating word is the hover tooltip only.
+const RATING_MARKS: Record<string, { label: string; icon: ReactNode; className: string }> = {
+  '4': { label: 'Easy', icon: <CircleCheckBig className="size-4" />, className: 'text-success' },
+  '3': { label: 'Good', icon: <CircleCheck className="size-4" />, className: 'text-primary' },
+  '2': { label: 'Hard', icon: <CircleAlert className="size-4" />, className: 'text-muted-foreground' },
+  '1': { label: 'Again', icon: <CircleX className="size-4" />, className: 'text-destructive' },
+  none: { label: 'Not attempted', icon: <CircleMinus className="size-4" />, className: 'text-muted-foreground' },
+}
+
+function RatingMark({ rating }: { rating: number | null }) {
+  const mark = (rating === null ? undefined : RATING_MARKS[String(rating)]) ?? RATING_MARKS.none
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            className={`inline-flex ${mark.className}`}
+            aria-label={mark.label}
+          >
+            {mark.icon}
+          </span>
+        }
+      />
+      <TooltipContent>{mark.label}</TooltipContent>
+    </Tooltip>
+  )
 }
 
 export default function RecapPage({ params }: { params: Promise<{ sessionId: string }> }) {
@@ -127,6 +171,32 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
                 </ul>
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-xl flex items-center gap-2">
+              <CheckCircle className="h-5 w-5 text-primary" />
+              Review Outcomes
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {!recap.reviewed_cards || recap.reviewed_cards.length === 0 ? (
+              <p className="text-muted-foreground italic text-center py-4">No review words came up this session.</p>
+            ) : (
+              <div className="grid gap-2">
+                {recap.reviewed_cards.map((card, i) => (
+                  <div key={`${card.front}-${i}`} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 bg-card/60">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{card.front}</p>
+                      {card.back ? <p className="text-xs text-muted-foreground truncate">{card.back}</p> : null}
+                    </div>
+                    <RatingMark rating={card.rating} />
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 

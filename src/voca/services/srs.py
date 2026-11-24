@@ -28,6 +28,19 @@ def new_card_state() -> str:
     return json.dumps(Card().to_dict())
 
 
+def parse_card_state(state_json: str) -> Card:
+    """Parse a stored card state; a malformed row falls back to a fresh card.
+
+    Seeded/imported rows can carry partial JSON (missing `card_id` etc., which
+    the fsrs package requires); a bad row must never break the review path —
+    the card just reschedules as if new.
+    """
+    try:
+        return Card.from_dict(json.loads(state_json))
+    except Exception:  # noqa: BLE001 - fallback scheduling beats a hard failure
+        return Card()
+
+
 def review_card_state(
     state_json: str, rating: Rating, when: datetime | None = None
 ) -> tuple[str, dict[str, Any]]:
@@ -36,7 +49,7 @@ def review_card_state(
     The log carries the FSRS rating as an int (1=Again 2=Hard 3=Good 4=Easy) and
     the review timestamp, ready for a `card_reviews` row.
     """
-    card = Card.from_dict(json.loads(state_json))
+    card = parse_card_state(state_json)
     at = when or datetime.now(UTC)
     updated_card, review_log = Scheduler().review_card(card, rating, at)
     return (
@@ -47,4 +60,4 @@ def review_card_state(
 
 def next_review(state_json: str) -> datetime:
     """The due date of the card with this FSRS state."""
-    return Card.from_dict(json.loads(state_json)).due
+    return parse_card_state(state_json).due

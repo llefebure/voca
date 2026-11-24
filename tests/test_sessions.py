@@ -265,14 +265,22 @@ async def test_end_session_skips_not_attempted_cards(client, fake_supabase, monk
         {"id": "sess-1", "user_id": "user-1", "status": "active"}
     ]
     fake_supabase.results[("transcripts", "select")] = []
+    fake_supabase.results[("cards", "select")] = [
+        {"id": "card-1", "front": "quisiera", "back": "I would like", "fsrs_data": new_card_state()}
+    ]
 
     response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
+    recap = response.json()["recap"]
+    # The scorecard includes not_attempted as a null rating (list entry, no log).
+    assert recap["reviewed_cards"] == [{"front": "quisiera", "back": "I would like", "rating": None}]
     assert fake_supabase.inserted_rows("cards") == []
     # Only the completion update plus the recap write happened; no card/profile updates.
     assert fake_supabase.updated_rows("cards") == []
     assert fake_supabase.updated_rows("profiles") == []
     assert fake_supabase.upserted_rows("user_languages") == []
+    # Not attempted never logs a review row.
+    assert fake_supabase.inserted_rows("card_reviews") == []
     assert fake_supabase.inserted_rows("card_reviews") == []  # ungraded → no log row
     # `new_cards` is present (empty) in the stored recap even with no cards.
     recap_update = next(
@@ -647,9 +655,10 @@ async def test_end_session_recap_includes_rubric_grade_outcomes_only_internally(
     response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
     recap = response.json()["recap"]
-    # No FSRS statuses, no stars, no lesson/bonus structure leaks into the recap.
+    # The scorecard is visible but schedule- and jargon-free: rating int only.
+    assert recap["reviewed_cards"] == [{"front": "quisiera", "back": "", "rating": 4}]
     serialized = str(recap)
-    for token in ("lessons", "bonus", "⭐", "strong_pass", "card_id", "fsrs"):
+    for token in ("lessons", "bonus", "⭐", "strong_pass", "card_id", "fsrs", "next_review"):
         assert token not in serialized
-    # The rating landed in the review log (internal state only).
+    # The rating landed in the review log.
     assert fake_supabase.inserted_rows("card_reviews")[0]["rating"] == 4

@@ -595,7 +595,8 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
     # The analyst sees every due card: its FSRS rubric maps the whole transcript
     # (whatever the conversation touched — panel exercises, review weaving,
     # casual usage) to card statuses.
-    due_cards = compact_cards(await asyncio.to_thread(fetch_due_cards, user.id, language))
+    due_rows = await asyncio.to_thread(fetch_due_cards, user.id, language)
+    due_cards = compact_cards(due_rows)
     existing_cards = await asyncio.to_thread(fetch_recent_cards, user.id, language)
 
     result = await post_session_agent.run(
@@ -663,6 +664,23 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
     # Always present so the recap page can render review material without
     # re-querying the cards table (empty when nothing was created).
     recap["new_cards"] = [{"type": c.type, "front": c.front, "back": c.back} for c in new_cards]
+    # The review scorecard: FSRS rating per reviewed word (rating is null for
+    # `not_attempted` — no review was logged). The recap page renders these as
+    # bare icons with the rating on hover; no schedules, no explanations.
+    due_by_id = {row.get("id"): row for row in due_rows}
+    recap["reviewed_cards"] = []
+    for review in analysis.reviewed_cards:
+        card_row = due_by_id.get(review.card_id)
+        if card_row is None:
+            continue  # never showcase a grade outside the due-card slate
+        rating = VOCA_RATING_MAP.get(review.outcome)
+        entry = {
+            "front": card_row.get("front") or "",
+            "back": card_row.get("back") or "",
+            "rating": int(rating) if rating is not None else None,
+        }
+        if not any(item["front"] == entry["front"] for item in recap["reviewed_cards"]):
+            recap["reviewed_cards"].append(entry)
     await db(supabase.table("sessions").update({"recap": recap}).eq("id", session["id"]))
 
     return {
