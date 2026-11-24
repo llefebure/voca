@@ -128,18 +128,16 @@ function ChatPageContent() {
   // The shared active-language pointer; falls back while the context loads.
   const targetLanguage = activeLanguage ?? DEFAULT_LANGUAGE
 
+  /* Keying on the language resets all chat state when the user toggles languages:
+     the previous conversation stays open in History under its own language (the
+     same semantics as "New session") — nothing is auto-resumed after a toggle.
+     The continue param only reaches the view once the context has resolved. */
   return (
-    <DashboardLayout title="Conversation Tutor">
-      {/* Keying on the language resets all chat state when the user toggles languages:
-          the previous conversation stays open in History under its own language (the
-          same semantics as "New session") — nothing is auto-resumed after a toggle.
-          The continue param only reaches the view once the context has resolved. */}
-      <ChatView
-        key={targetLanguage}
-        targetLanguage={targetLanguage}
-        continueSessionId={languageLoading ? null : continueSessionId}
-      />
-    </DashboardLayout>
+    <ChatView
+      key={targetLanguage}
+      targetLanguage={targetLanguage}
+      continueSessionId={languageLoading ? null : continueSessionId}
+    />
   )
 }
 
@@ -524,18 +522,9 @@ function ChatView({
   }
 
   return (
-    <div className="relative flex h-full w-full flex-col">
-      <div className="flex h-11 shrink-0 items-center justify-end gap-1 border-b px-8">
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button variant="ghost" size="icon" onClick={toggleMuted}>
-                {muted ? <VolumeXIcon /> : <Volume2Icon />}
-              </Button>
-            }
-          />
-          <TooltipContent>{muted ? 'Speech is muted' : 'Speech is on'}</TooltipContent>
-        </Tooltip>
+    <DashboardLayout
+      title="Conversation Tutor"
+      actions={
         <Tooltip>
           <TooltipTrigger
             render={
@@ -546,8 +535,9 @@ function ChatView({
           />
           <TooltipContent>New session</TooltipContent>
         </Tooltip>
-      </div>
-
+      }
+    >
+      <div className="relative flex h-full w-full flex-col">
       {/* The content region splits into two flush rectangles when a panel is
           showing: the chat pane and the canvas pane together fill the full
           rectangle (divider line between them), rather than the panel floating
@@ -607,6 +597,22 @@ function ChatView({
             rows={1}
           />
           <InputGroupAddon align="block-end" className="justify-end">
+            {/* Voice on/off lives with the other composition controls. */}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <InputGroupButton
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={toggleMuted}
+                    aria-label={muted ? 'Speech is muted' : 'Speech is on'}
+                  >
+                    {muted ? <VolumeXIcon /> : <Volume2Icon />}
+                  </InputGroupButton>
+                }
+              />
+              <TooltipContent>{muted ? 'Speech is muted' : 'Speech is on'}</TooltipContent>
+            </Tooltip>
             {/* Ending is the step people miss: a red stop trigger right next to
                 the send button, only while a session is open and the tutor is
                 quiet (never during submit/stream). */}
@@ -660,6 +666,7 @@ function ChatView({
         </DialogContent>
       </Dialog>
     </div>
+    </DashboardLayout>
   )
 
   function MessageThread({ entries: threadEntries, status }: { entries: typeof entries; status: ChatStatus }) {
