@@ -525,37 +525,27 @@ function ChatView({
 
   return (
     <div className="relative flex h-full w-full flex-col">
-      <div className="flex items-start justify-between gap-4 px-8 pt-6 pb-4">
-        <div className="flex flex-col gap-1">
-          <div className="font-medium">{languageName(targetLanguage)} Session</div>
-          <div className="text-sm text-muted-foreground">
-            {activePanel
-              ? 'Your tutor put something on the panel →'
-              : 'Practice speaking with your conversation partner.'}
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button variant="ghost" size="icon" onClick={toggleMuted}>
-                  {muted ? <VolumeXIcon /> : <Volume2Icon />}
-                </Button>
-              }
-            />
-            <TooltipContent>{muted ? 'Speech is muted' : 'Speech is on'}</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button variant="ghost" size="icon" onClick={startNewSession} disabled={streaming}>
-                  <MessageSquarePlusIcon />
-                </Button>
-              }
-            />
-            <TooltipContent>New session</TooltipContent>
-          </Tooltip>
-        </div>
+      <div className="flex h-11 shrink-0 items-center justify-end gap-1 border-b px-8">
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button variant="ghost" size="icon" onClick={toggleMuted}>
+                {muted ? <VolumeXIcon /> : <Volume2Icon />}
+              </Button>
+            }
+          />
+          <TooltipContent>{muted ? 'Speech is muted' : 'Speech is on'}</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button variant="ghost" size="icon" onClick={startNewSession} disabled={streaming}>
+                <MessageSquarePlusIcon />
+              </Button>
+            }
+          />
+          <TooltipContent>New session</TooltipContent>
+        </Tooltip>
       </div>
 
       {/* The content region splits into two flush rectangles when a panel is
@@ -600,7 +590,7 @@ function ChatView({
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="px-8 pt-4 pb-8">
+      <form onSubmit={handleSubmit} className="border-t px-8 pt-3 pb-6">
         <InputGroup className="h-auto min-h-14 flex-col py-1">
           <InputGroupTextarea
             value={input}

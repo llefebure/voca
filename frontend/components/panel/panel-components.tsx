@@ -45,7 +45,7 @@ export function PanelCanvas({
     >
       <div
         className={cn(
-          'flex items-center gap-2 border-b border-primary/20',
+          'flex items-center gap-2 border-b',
           flush ? 'py-2.5 pl-4 pr-3' : 'pt-3 pb-2 px-4',
         )}
       >
