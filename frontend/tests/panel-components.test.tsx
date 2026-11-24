@@ -30,6 +30,29 @@ describe('PanelCanvas', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it('renders the markdown faithfully: headings, subheadings, and single newlines', () => {
+    const { container } = render(
+      <PanelCanvas
+        panel={{
+          ...menuPanel(),
+          markdown:
+            '# Historia\n## El primer día\nMatteo llegó temprano.\nNo encontró su café.\n\n### El canal',
+        }}
+      />,
+    )
+    // Header and subheader characters become real heading levels.
+    expect(screen.getByRole('heading', { level: 1, name: 'Historia' })).toBeVisible()
+    expect(screen.getByRole('heading', { level: 2, name: 'El primer día' })).toBeVisible()
+    expect(screen.getByRole('heading', { level: 3, name: 'El canal' })).toBeVisible()
+    // Single newlines inside a paragraph render as line breaks, not spaces:
+    // both lines share one paragraph, separated by <br>.
+    const body = container.querySelector('[data-testid="panel-canvas"] .prose p') as HTMLElement
+    expect(body).not.toBeNull()
+    expect(body.querySelector('br')).not.toBeNull()
+    expect(body.textContent).toContain('Matteo llegó temprano.')
+    expect(body.textContent).toContain('No encontró su café.')
+  })
+
   it('decodes stored literal escapes before rendering', () => {
     render(
       <PanelCanvas panel={{ ...menuPanel(), markdown: '**Tacos**\\n\\n| Plato |\\n| :--- |' }} />,

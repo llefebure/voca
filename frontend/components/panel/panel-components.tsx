@@ -47,7 +47,7 @@ export function PanelCanvas({ panel, onClose }: { panel: PanelInstance; onClose?
         ) : null}
       </div>
       <div className="flex-1 overflow-y-auto px-4 py-3">
-        <Markdown className="prose-invert-none">{display.markdown}</Markdown>
+        <Markdown breaks className="prose-invert-none">{display.markdown}</Markdown>
       </div>
     </div>
   )
@@ -77,7 +77,7 @@ export function PanelRecord({ panel, expanded = false }: { panel: PanelInstance;
       </button>
       {open ? (
         <div className="pt-2">
-          <Markdown className="prose-invert-none">{display.markdown}</Markdown>
+          <Markdown breaks className="prose-invert-none">{display.markdown}</Markdown>
         </div>
       ) : null}
     </div>
