@@ -46,6 +46,7 @@ from voca.services.srs import (
     review_card_state,
 )
 from voca.services.supabase_client import supabase
+from voca.services.telemetry import configure_telemetry
 
 load_dotenv()
 
@@ -58,6 +59,9 @@ _LEAK_HOLD = 24
 _LEAK_PASSTHROUGH_CAP = 4000
 
 app = FastAPI(title="Voca Backend")
+
+# Logfire: FastAPI requests, outgoing httpx calls, and Pydantic AI agent runs.
+configure_telemetry(app)
 
 logger = logging.getLogger("voca.main")
 

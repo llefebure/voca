@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.162.2",
     "fsrs>=6.3.2",
     "httpx>=0.28.1",
+    "logfire[fastapi,httpx]>=5.4.0",
     "pydantic-ai>=2.66.0",
     "python-dotenv>=1.2.4",
     "supabase>=2.34.1",
