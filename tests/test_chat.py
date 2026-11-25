@@ -173,6 +173,29 @@ async def test_chat_passes_effective_profile_to_tutor(client, monkeypatch, fake_
 
 
 @pytest.mark.asyncio
+async def test_chat_pins_conversation_id_to_session_id(client, monkeypatch, fake_supabase):
+    """The tutor run carries the DB session id as its Logfire conversation id,
+    so every run of a session groups under one conversation in Logfire."""
+    fake_supabase.results[("sessions", "select")] = [active_session_response(id="sess-42")]
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
+    captured: dict[str, Any] = {}
+
+    class CapturingTutor(FakeTutorAgent):
+        @contextlib.asynccontextmanager
+        async def run_stream(self, _prompt, deps=None, **_kwargs):
+            captured["kwargs"] = _kwargs
+            yield FakeStreamResult(["OK"])
+
+    monkeypatch.setattr(voca_main, "tutor_agent", CapturingTutor([]))
+
+    response = await client.post(
+        "/chat", json={"message": "hola", "session_id": "sess-42"}, headers=AUTH
+    )
+    assert response.status_code == 200
+    assert captured["kwargs"]["conversation_id"] == "sess-42"
+
+
+@pytest.mark.asyncio
 async def test_chat_includes_due_cards_in_deps(client, monkeypatch, fake_supabase):
     """Due cards ride into the tutor deps for natural review weaving."""
     fake_supabase.results[("sessions", "select")] = [active_session_response()]

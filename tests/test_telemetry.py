@@ -8,9 +8,13 @@ is set because capfire's own `configure()` build re-builds the resource.
 import httpx
 import pytest
 from logfire.testing import CaptureLogfire
+from pydantic_ai.models.test import TestModel
 
 from voca import main as voca_main
+from voca.agents.tutor_agent import tutor_agent
 from voca.services.telemetry import SERVICE_NAME
+
+AUTH = {"Authorization": "Bearer valid-token"}
 
 
 @pytest.fixture
@@ -39,3 +43,39 @@ async def test_fastapi_request_emits_logfire_span(
     assert span["name"] == "GET /health"
     assert span["attributes"]["http.method"] == "GET"
     assert span["resource"]["attributes"]["service.name"] == SERVICE_NAME
+
+
+@pytest.mark.asyncio
+async def test_chat_agent_run_span_carries_conversation_id(
+    client, logfire_service_name, fake_supabase, capfire: CaptureLogfire
+):
+    """The tutor's agent run span is stamped with the DB session id as
+    `gen_ai.conversation.id` — Logfire's conversation grouping contract."""
+    fake_supabase.results[("sessions", "select")] = [
+        {"id": "sess-42", "user_id": "user-1", "status": "active", "language": "es"}
+    ]
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
+
+    with tutor_agent.override(model=TestModel(call_tools=[])):
+        response = await client.post(
+            "/chat", json={"message": "hola", "session_id": "sess-42"}, headers=AUTH
+        )
+    assert response.status_code == 200
+
+    spans = capfire.exporter.exported_spans_as_dict(include_resources=True)
+    run_spans = [
+        span
+        for span in spans
+        if span["attributes"].get("logfire.msg").endswith(" run")
+        and "gen_ai.conversation.id" in span["attributes"]
+    ]
+    assert run_spans, f"no agent run spans among: {[span['name'] for span in spans]}"
+    conversation_ids = {span["attributes"]["gen_ai.conversation.id"] for span in run_spans}
+    assert conversation_ids == {"sess-42"}
+    # The id is also spread to nested spans via OTel baggage.
+    stamped = {
+        span["attributes"]["gen_ai.conversation.id"]
+        for span in spans
+        if span["attributes"].get("gen_ai.conversation.id")
+    }
+    assert stamped == {"sess-42"}

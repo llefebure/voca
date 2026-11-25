@@ -182,16 +182,21 @@ async def test_end_session_inserts_cards_and_updates_srs(
         {"id": "card-1", "front": "exhausted", "fsrs_data": new_card_state()}
     ]
 
-    async def fake_run(_prompt, deps=None):
+    run_kwargs: dict = {}
+
+    async def fake_run(_prompt, deps=None, **_kwargs):
         assert deps["transcript"], "analyst must receive the transcript"
         assert any(card["id"] == "card-1" for card in deps["due_cards"])
         assert deps["target_language"] == "es"
+        run_kwargs.update(_kwargs)
         return type("R", (), {"output": analyst_result})()
 
     monkeypatch.setattr(voca_main.post_session_agent, "run", fake_run)
 
     response = await client.post("/sessions/end", json={"session_id": "sess-1"}, headers=AUTH)
     assert response.status_code == 200
+    # The analyst run is pinned to the session's Logfire conversation id.
+    assert run_kwargs["conversation_id"] == "sess-1"
     body = response.json()
     assert body["new_cards_count"] == 1
     assert body["recap"]["next_time_preview"] == "restaurant role play"
@@ -257,7 +262,7 @@ async def test_end_session_skips_not_attempted_cards(client, fake_supabase, monk
         profile_updates=ProfileUpdates(),
     )
 
-    async def fake_run(_prompt, deps=None):
+    async def fake_run(_prompt, deps=None, **_kwargs):
         return type("R", (), {"output": result})()
 
     monkeypatch.setattr(voca_main.post_session_agent, "run", fake_run)
@@ -301,7 +306,7 @@ async def test_end_session_uses_session_language(client, fake_supabase, monkeypa
         profile_updates=ProfileUpdates(level="B2"),
     )
 
-    async def fake_run(_prompt, deps=None):
+    async def fake_run(_prompt, deps=None, **_kwargs):
         assert deps["target_language"] == "fr"
         # Grading only matches cards in the session's language.
         return type("R", (), {"output": result})()
@@ -353,7 +358,7 @@ async def test_end_session_drops_candidates_matching_existing_cards(
         profile_updates=ProfileUpdates(),
     )
 
-    async def fake_run(_prompt, deps=None):
+    async def fake_run(_prompt, deps=None, **_kwargs):
         # The read-only recent-cards feed is front/back only, language-scoped.
         assert all(set(card) == {"front", "back"} for card in deps["existing_cards"])
         return type("R", (), {"output": result})()
@@ -418,7 +423,7 @@ async def test_end_session_collapses_duplicate_candidates(client, fake_supabase,
         profile_updates=ProfileUpdates(),
     )
 
-    async def fake_run(_prompt, deps=None):
+    async def fake_run(_prompt, deps=None, **_kwargs):
         return type("R", (), {"output": result})()
 
     monkeypatch.setattr(voca_main.post_session_agent, "run", fake_run)
@@ -499,7 +504,7 @@ async def test_end_session_sweeps_all_due_cards(client, fake_supabase, monkeypat
         profile_updates=ProfileUpdates(),
     )
 
-    async def fake_run(_prompt, deps=None):
+    async def fake_run(_prompt, deps=None, **_kwargs):
         # The slate contains every due card; nothing is pre-excluded.
         assert deps["due_cards"] == [
             {"id": "card-1", "front": "quisiera", "back": ""},
@@ -529,7 +534,7 @@ async def test_end_session_rejects_already_ended_without_rerunning_agents(
     """A completed session cannot be ended twice; the analyst must never run again."""
     calls = 0
 
-    async def fail_run(_prompt, deps=None):
+    async def fail_run(_prompt, deps=None, **_kwargs):
         nonlocal calls
         calls += 1
         raise AssertionError("post-session agent ran on an already-ended session")
@@ -650,7 +655,7 @@ async def test_end_session_recap_includes_rubric_grade_outcomes_only_internally(
         profile_updates=ProfileUpdates(),
     )
 
-    async def fake_run(_prompt, deps=None):
+    async def fake_run(_prompt, deps=None, **_kwargs):
         return type("R", (), {"output": result})()
 
     monkeypatch.setattr(voca_main.post_session_agent, "run", fake_run)
