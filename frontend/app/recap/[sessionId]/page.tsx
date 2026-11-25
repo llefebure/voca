@@ -1,14 +1,26 @@
 'use client'
 
-import { useState, useEffect, use, Suspense } from 'react'
+import { useState, useEffect, use, Suspense, type ReactNode } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useRouter } from 'next/navigation'
-import { CheckCircle, XCircle, BookOpen, ArrowRight, TrendingUp, Target } from 'lucide-react'
+import {
+  ArrowRight,
+  BookOpen,
+  CheckCircle,
+  CircleAlert,
+  CircleCheck,
+  CircleCheckBig,
+  CircleMinus,
+  CircleX,
+  TrendingUp,
+  Target,
+  XCircle,
+} from 'lucide-react'
 import { DashboardLayout } from '@/components/dashboard-layout'
-import { POSITIVE_RATING_MIN } from '@/lib/stats'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 type RecapData = {
   positives?: string[]
@@ -17,14 +29,37 @@ type RecapData = {
   user_word_count?: number
   // The analyst's new cards for this session (always present; empty when none).
   new_cards?: { type: string; front: string; back: string }[]
+  // The review scorecard: FSRS rating per reviewed word (4=Easy, 3=Good, 2=Hard,
+  // 1=Again, null=not attempted). Bare icons; the rating text is on hover.
+  reviewed_cards?: { front: string; back: string; rating: number | null }[]
 }
 
-// The session's stored plan (from POST /sessions/plan): the lesson plus the
-// review targets the tutor was briefed to weave into the conversation.
-type SessionPlanShape = {
-  lesson?: { template?: string; topic?: string; scenario?: string | null; objectives?: string[] }
-  opening_hook?: string
-  cards?: { id: string; front: string; back: string }[]
+// FSRS rating → bare icon; the rating word is the hover tooltip only.
+const RATING_MARKS: Record<string, { label: string; icon: ReactNode; className: string }> = {
+  '4': { label: 'Easy', icon: <CircleCheckBig className="size-4" />, className: 'text-success' },
+  '3': { label: 'Good', icon: <CircleCheck className="size-4" />, className: 'text-primary' },
+  '2': { label: 'Hard', icon: <CircleAlert className="size-4" />, className: 'text-muted-foreground' },
+  '1': { label: 'Again', icon: <CircleX className="size-4" />, className: 'text-destructive' },
+  none: { label: 'Not attempted', icon: <CircleMinus className="size-4" />, className: 'text-muted-foreground' },
+}
+
+function RatingMark({ rating }: { rating: number | null }) {
+  const mark = (rating === null ? undefined : RATING_MARKS[String(rating)]) ?? RATING_MARKS.none
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span
+            className={`inline-flex ${mark.className}`}
+            aria-label={mark.label}
+          >
+            {mark.icon}
+          </span>
+        }
+      />
+      <TooltipContent>{mark.label}</TooltipContent>
+    </Tooltip>
+  )
 }
 
 export default function RecapPage({ params }: { params: Promise<{ sessionId: string }> }) {
@@ -50,8 +85,6 @@ function RecapLoading() {
 function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = use(params)
   const [recap, setRecap] = useState<RecapData | null>(null)
-  const [plan, setPlan] = useState<SessionPlanShape | null>(null)
-  const [sessionReviews, setSessionReviews] = useState<{ card_id: string; rating: number }[]>([])
   const [loading, setLoading] = useState(true)
   const router = useRouter()
 
@@ -60,7 +93,7 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
       try {
         const { data: session } = await supabase
           .from('sessions')
-          .select('recap, plan, user_id')
+          .select('recap, user_id')
           .eq('id', sessionId)
           .single()
 
@@ -69,16 +102,7 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
           return
         }
 
-        // Reviews graded against this session's due cards (logged at end time.
-        // Rows without session_id predate the column — not shown per target).
-        const { data: sessionReviewsData } = await supabase
-          .from('card_reviews')
-          .select('card_id, rating')
-          .eq('session_id', sessionId)
-
         setRecap((session.recap as RecapData) ?? null)
-        setPlan((session.plan as SessionPlanShape) ?? null)
-        setSessionReviews(sessionReviewsData ?? [])
       } catch (error) {
         console.error('Error fetching recap:', error)
       } finally {
@@ -97,11 +121,6 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
     <DashboardLayout title="No Recap">
       <div className="flex h-full items-center justify-center text-muted-foreground">No recap found for this session.</div>
     </DashboardLayout>
-  )
-
-  // The planned targets, with this session's logged grade per card (if any).
-  const gradeByTarget = new Map<string, number>(
-    sessionReviews.map((row) => [row.card_id, row.rating]),
   )
 
   return (
@@ -158,48 +177,25 @@ function RecapContent({ params }: { params: Promise<{ sessionId: string }> }) {
         <Card>
           <CardHeader>
             <CardTitle className="text-xl flex items-center gap-2">
-              <Target className="h-5 w-5 text-primary" />
-              Session Targets
+              <CheckCircle className="h-5 w-5 text-primary" />
+              Review Outcomes
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {!plan?.cards || plan.cards.length === 0 ? (
-              <p className="text-muted-foreground italic text-center py-4">
-                This session had no planned review targets.
-              </p>
+            {!recap.reviewed_cards || recap.reviewed_cards.length === 0 ? (
+              <p className="text-muted-foreground italic text-center py-4">No review words came up this session.</p>
             ) : (
-              <>
-                <div className="grid gap-3">
-                  {plan.cards.map((target) => {
-                    const rating = gradeByTarget.get(target.id)
-                    const recalled = rating != null && rating >= POSITIVE_RATING_MIN
-                    const missed = rating != null && !recalled
-                    return (
-                      <div key={target.id} className="flex items-center justify-between gap-3 rounded-xl border p-4 bg-card shadow-sm hover:shadow-md transition-shadow">
-                        <div className="space-y-0.5 min-w-0">
-                          <p className="text-sm font-semibold">{target.front}</p>
-                          <p className="text-xs text-muted-foreground truncate">{target.back}</p>
-                        </div>
-                        {recalled ? (
-                          <Badge className="shrink-0 bg-brand-green/25 text-success dark:bg-brand-green/15 dark:text-brand-green">
-                            <CheckCircle />
-                            Recalled
-                          </Badge>
-                        ) : missed ? (
-                          <Badge variant="destructive" className="shrink-0">
-                            <XCircle />
-                            Missed
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary" className="shrink-0">
-                            Not attempted
-                          </Badge>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </>
+              <div className="grid gap-2">
+                {recap.reviewed_cards.map((card, i) => (
+                  <div key={`${card.front}-${i}`} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 bg-card/60">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{card.front}</p>
+                      {card.back ? <p className="text-xs text-muted-foreground truncate">{card.back}</p> : null}
+                    </div>
+                    <RatingMark rating={card.rating} />
+                  </div>
+                ))}
+              </div>
             )}
           </CardContent>
         </Card>

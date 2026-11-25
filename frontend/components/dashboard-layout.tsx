@@ -9,10 +9,13 @@ export function DashboardLayout({
   children,
   className,
   title,
+  actions,
 }: {
   children: React.ReactNode
   className?: string
   title?: string
+  /** Page-specific actions rendered in the header, left of the theme toggle. */
+  actions?: React.ReactNode
 }) {
   return (
     // The LanguageProvider lives in the root layout (app/layout.tsx) so pages can
@@ -28,7 +31,10 @@ export function DashboardLayout({
           <div className="flex items-center gap-2">
             {title && <h1 className="text-lg font-semibold">{title}</h1>}
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-1">
+            {actions}
+            <ThemeToggle />
+          </div>
         </header>
         <main className={cn("flex-1 overflow-auto", className)}>
           {children}

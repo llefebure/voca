@@ -1,20 +1,18 @@
-"""Shared LLM configuration for all Voca agents (local Ollama, OpenAI-compatible).
+"""Shared LLM configuration for all Voca agents (local Ollama server, OpenAI-compatible).
 
-Two model lanes:
-- `ollama_model` — the fast, local chat model (streaming tutor, simple translate).
-- `planning_model` — a cloud reasoning-grade model for the structured-output agents
-  (session planner, post-session analyst): small local models are unreliable at
-  schema-adherent JSON.
+One lane, one model: every agent — the streaming tutor included — runs the same
+cloud model. Native tool calling is what makes tutor-driven canvas panels
+dependable, and the strong model does the tutor's job better too. Model settings
+stay at their defaults; any "too slow" concern is raised from real use and
+handled then, not pre-tuned here.
 """
 
 import os
 
 from pydantic_ai.models.ollama import OllamaModel
 from pydantic_ai.providers.ollama import OllamaProvider
-from pydantic_ai.settings import ModelSettings
 
-LLM_MODEL_NAME = os.getenv("LLM_MODEL", "granite4.2:3b")
-PLANNING_MODEL_NAME = os.getenv("LLM_PLANNING_MODEL", "gemma4:31b-cloud")
+LLM_MODEL_NAME = os.getenv("LLM_MODEL", "gemma4:31b-cloud")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
 
 
@@ -33,19 +31,8 @@ def _build_provider() -> OllamaProvider:
     return OllamaProvider(**kwargs)
 
 
-ollama_model = OllamaModel(
+# The single model every Voca agent speaks through.
+voca_model = OllamaModel(
     LLM_MODEL_NAME,
-    provider=_build_provider(),
-    settings=ModelSettings(
-        # Through the OpenAI-compat endpoint `think: false` is ignored; granite
-        # "thinks" unless reasoning_effort=none — verified ~10-100x faster turns.
-        extra_body={"reasoning_effort": "none"},
-    ),
-)
-
-# No granite-specific settings here; gemma4's thinking is left on by default and
-# can be tuned (e.g. `extra_body={"reasoning_effort": "none"}`) once proven costly.
-planning_model = OllamaModel(
-    PLANNING_MODEL_NAME,
     provider=_build_provider(),
 )

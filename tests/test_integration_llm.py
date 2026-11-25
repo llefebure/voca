@@ -1,29 +1,51 @@
-"""Live-LLM integration tests — opt-in only (needs a local Ollama server).
+"""Live-LLM integration tests — opt-in only (needs the Ollama server + gemma4:31b-cloud).
 
 Excluded from the default run via `-m "not integration"` (see pyproject).
-Run with: `uv run task test:all`. The planner/post-session tests exercise the
-`gemma4:31b-cloud` planning model end-to-end, proving schema adherence where
-the small local model used to fail.
+Run with: `uv run task test:all`. Every agent shares one model lane
+(`gemma4:31b-cloud`): these tests pin down schema adherence, tool-call behavior
+(the tutor's `show_panel` canvas calls), and the FSRS rubric end-to-end.
 """
+
+import asyncio
 
 import pytest
 
-from voca.agents.post_session_agent import PostSessionResult, post_session_agent
-from voca.agents.session_planner_agent import SessionPlan, session_planner_agent
+from voca.agents.post_session_agent import PostSessionDeps, PostSessionResult, post_session_agent
 from voca.agents.tutor_agent import TutorDeps, tutor_agent
 
-TUTOR_DEPS: TutorDeps = {
-    "user_id": "user-1",
-    "user_profile": {"goals": "travel to Spain", "level": "A2", "interests": "architecture"},
-    "session_id": "session-1",
-}
+ALL_BLOCK_TYPES = {"scenario", "text", "dialogue", "questions", "tasks", "word_bank"}
+
+
+def tutor_deps(**overrides) -> TutorDeps:
+    base: TutorDeps = {
+        "user_id": "user-1",
+        "session_id": "session-1",
+        "user_profile": {
+            "target_language": "es",
+            "goals": "travel to Spain",
+            "level": "A2",
+            "interests": "architecture",
+        },
+        "due_cards": [],
+        "events": asyncio.Queue(),
+        "record_event": None,
+    }
+    base.update(overrides)
+    return base
+
+
+async def drained(queue: asyncio.Queue) -> list[dict]:
+    items: list[dict] = []
+    while not queue.empty():
+        items.append(queue.get_nowait())
+    return items
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_tutor_replies_in_spanish():
     """The tutor answers a Spanish prompt with a short, plain-text reply."""
-    result = await tutor_agent.run("Hola, ¿qué tal? Me llamo Alex.", deps=TUTOR_DEPS)
+    result = await tutor_agent.run("Hola, ¿qué tal? Me llamo Alex.", deps=tutor_deps())
     assert isinstance(result.output, str)
     assert result.output.strip()
     # TTS-optimized tutor turns should stay short.
@@ -32,75 +54,98 @@ async def test_tutor_replies_in_spanish():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_session_planner_produces_valid_plan():
-    """The planning model must emit schema-valid output (the original pain point)."""
-    deps = {
-        "user_id": "user-1",
-        "user_profile": {
-            "target_language": "es",
-            "goals": "travel to Mexico",
-            "level": "A2",
-            "interests": "cooking",
-        },
-        "due_cards": [
-            {"id": "card-1", "front": "exhausted", "back": "agotado"},
-            {"id": "card-2", "front": "the bill / check", "back": "la cuenta"},
-            {"id": "card-3", "front": "I would like…", "back": "quisiera…"},
-            {"id": "card-4", "front": "spicy", "back": "picante"},
-        ],
-    }
-    result = await session_planner_agent.run("Plan the session.", deps=deps)  # type: ignore[arg-type]
-    assert isinstance(result.output, SessionPlan)
-    plan = result.output
-    # Selected IDs must reference due cards, not invented content.
-    valid_ids = {card["id"] for card in deps["due_cards"]}
-    assert plan.card_ids, "planner should select at least one card"
-    assert set(plan.card_ids) <= valid_ids
-    assert plan.lesson.template in {"role_play", "reading_comprehension", "free_conversation"}
-    assert plan.lesson.topic.strip()
-    assert plan.opening_hook.strip()
+async def test_tutor_shows_menu_panel_when_role_playing_a_restaurant():
+    """A menu request drives the real show_panel tool: a panel_shown event.
+
+    The model's tool-calling is stochastic, so the prompt retries once with a
+    blunter ask if the first turn produced no panel.
+    """
+
+    async def record_event(kind, data):
+        pass
+
+    deps = tutor_deps(record_event=record_event)
+    prompts = [
+        "Estoy sentado en un restaurante mexicano y me has dado la carta. Enséñamela, por favor.",
+        "Muéstrame la carta en el panel, por favor.",
+    ]
+    for prompt in prompts:
+        await tutor_agent.run(prompt, deps=deps)
+    # Status chips may queue; the assert is on typed events only.
+    events = await drained(deps["events"])
+    panels = [
+        event
+        for event in events
+        if event.get("type") == "event" and event.get("kind") == "panel_shown"
+    ]
+    assert panels, "the tutor must call show_panel for a menu request"
+    panel = panels[0]["data"]["panel"]
+    assert panel["title"].strip()
+    assert panel["blocks"], "the panel carries at least one content block"
+    for block in panel["blocks"]:
+        assert block["type"] in ALL_BLOCK_TYPES
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_tutor_small_talk_stays_panel_free():
+    """Casual chat without a content need must not stack a panel."""
+
+    async def record_event(kind, data):
+        pass
+
+    deps = tutor_deps(record_event=record_event)
+    await tutor_agent.run(
+        "Hola, ¿qué tal? Hoy fue un día larguísimo en el trabajo, pero bien.",
+        deps=deps,
+    )
+    events = await drained(deps["events"])
+    panels = [event for event in events if event.get("kind") == "panel_shown"]
+    assert panels == [], "small talk needs no panel"
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_post_session_produces_valid_analysis():
-    """Schema-valid post-session output: card grades by ID, typed profile updates."""
-    deps = {
+    """Schema-valid post-session output: FSRS rubric grades by ID, typed updates."""
+    deps: PostSessionDeps = {
         "user_id": "user-1",
         "session_id": "session-1",
         "target_language": "es",
-        "session_plan": {
-            "lesson": {
-                "template": "free_conversation",
-                "topic": "Ordering at a taquería",
-                "objectives": ["order politely", "ask about prices"],
-            },
-            "cards": [{"id": "card-2", "front": "the bill / check", "back": "la cuenta"}],
-        },
         "transcript": [
-            {"speaker": "tutor", "text": "¡Hola! Que gusto verte. ¿Listo para la taquería?"},
-            {"speaker": "user", "text": "Hola! Sí. Quisiero un tacos de pastor, por favor."},
+            {"speaker": "tutor", "text": "¡Hola! Dime, ¿qué se te antoja hoy?"},
+            {"speaker": "user", "text": "Quisiero un tacos de pastor, por favor."},
             {
                 "speaker": "tutor",
-                "text": "Casi perfecto: decimos 'quisiera unos tacos'. ¿Algo de tomar?",
+                "text": "Casi perfecto: decimos 'quisiera unos tacos'. ¿Ya conoces 'la cuenta'?",
             },
-            {"speaker": "user", "text": "Sí, un agua de horchata. ¿Cuánto cuesta todo?"},
-            {
-                "speaker": "tutor",
-                "text": "Muy bien preguntado. '¿Cuánto cuesta todo?' es perfecto.",
-            },
+            {"speaker": "user", "text": "¿La cuenta? No sé. ¿Qué es?"},
+            {"speaker": "tutor", "text": "Es el billete o ticket cuando terminas de comer."},
         ],
         "due_cards": [
-            {"id": "card-1", "front": "exhausted", "back": "agotado"},
+            {"id": "card-1", "front": "I would like…", "back": "quisiera…"},
             {"id": "card-2", "front": "the bill / check", "back": "la cuenta"},
         ],
+        "existing_cards": [],
     }
-    result = await post_session_agent.run("Analyze the session.", deps=deps)  # type: ignore[arg-type]
+    result = await post_session_agent.run(
+        "Analyze the session and generate cards and recap.", deps=deps
+    )
     assert isinstance(result.output, PostSessionResult)
     analysis = result.output
-    valid_ids = {card["id"] for card in deps["due_cards"]}
     for grade in analysis.reviewed_cards:
-        assert grade.card_id in valid_ids
+        assert grade.card_id in {"card-1", "card-2"}
+        assert grade.evidence.strip(), "each rubric grade cites the transcript"
+        assert grade.outcome in {
+            "strong_pass",
+            "pass",
+            "recognition_pass",
+            "miss",
+            "not_attempted",
+        }
+    # card-1 was used (wrongly once, then corrected): it must be graded, not ignored.
+    graded_ids = {grade.card_id for grade in analysis.reviewed_cards}
+    assert "card-1" in graded_ids, "the rubric grades every card the transcript touched"
     assert analysis.recap.next_time_preview.strip()
 
 
@@ -108,11 +153,10 @@ async def test_post_session_produces_valid_analysis():
 @pytest.mark.asyncio
 async def test_post_session_correct_confident_transcript_yields_no_cards():
     """Harvest rule: with no mistakes and no questions, 0 cards is the correct output."""
-    deps = {
+    deps: PostSessionDeps = {
         "user_id": "user-1",
         "session_id": "session-1",
         "target_language": "es",
-        "existing_cards": [{"front": "the bill / check", "back": "la cuenta"}],
         "transcript": [
             {"speaker": "tutor", "text": "¡Hola Alex! ¿Cómo estás hoy?"},
             {
@@ -137,8 +181,9 @@ async def test_post_session_correct_confident_transcript_yields_no_cards():
             },
         ],
         "due_cards": [],
+        "existing_cards": [{"front": "the bill / check", "back": "la cuenta"}],
     }
-    result = await post_session_agent.run("Analyze the session.", deps=deps)  # type: ignore[arg-type]
+    result = await post_session_agent.run("Analyze the session.", deps=deps)
     assert isinstance(result.output, PostSessionResult)
     assert result.output.new_cards == []
 
@@ -157,15 +202,15 @@ async def test_post_session_corrected_item_yields_card_citing_transcript():
         },
         {"speaker": "user", "text": "Fui con mi hermana. ¿Qué tiempo hace para ir al cine?"},
     ]
-    deps = {
+    deps: PostSessionDeps = {
         "user_id": "user-1",
         "session_id": "session-1",
         "target_language": "es",
-        "existing_cards": [],
         "transcript": transcript,
         "due_cards": [],
+        "existing_cards": [],
     }
-    result = await post_session_agent.run("Analyze the session.", deps=deps)  # type: ignore[arg-type]
+    result = await post_session_agent.run("Analyze the session.", deps=deps)
     assert isinstance(result.output, PostSessionResult)
     assert result.output.new_cards, "a corrected item must become at least one card"
     transcript_text = " ".join(message["text"] for message in transcript)

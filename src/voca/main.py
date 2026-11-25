@@ -1,15 +1,22 @@
 """Voca FastAPI backend.
 
-Chat is streamed as Server-Sent Events with single-line JSON frames:
-`data: {"type":"delta","text":...}` until `{"type":"done"}` (or `{"type":"error"}`), so
-newlines inside deltas cannot corrupt the stream. Serve this app with
-`uv run uvicorn voca.main:app` from the repository root.
+One continuous conversation per session, with a canvas: the tutor agent calls
+`show_panel` and the UI pops the content on the right (split view). Chat is
+streamed as Server-Sent Events with single-line JSON frames:
+`data: {"type":"delta","text":...}` for chat text, `{"type":"status","text":...}`
+for transient chips, `{"type":"event","kind":...,"data":...}` for structured UI
+events (`panel_shown`/`panel_hidden`), and `{"type":"done"}` (or
+`{"type":"error"}`), so newlines inside payloads cannot corrupt the stream.
+At session end, an analyst applies the FSRS rubric to the transcript and writes
+new cards + recap. Serve this app with `uv run uvicorn voca.main:app` from the
+repository root.
 """
 
 import asyncio
 import json
 import logging
 import os
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -24,10 +31,14 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, UserPromptPart
 
 from voca.agents.post_session_agent import CardCandidate, post_session_agent
-from voca.agents.session_planner_agent import session_planner_agent
-from voca.agents.tutor_agent import TutorDeps, tutor_agent
+from voca.agents.tutor_agent import (
+    TutorDeps,
+    execute_leaked,
+    parse_tool_leak,
+    tutor_agent,
+)
 from voca.services.languages import DEFAULT_LANGUAGE
-from voca.services.llm import LLM_BASE_URL, ollama_model
+from voca.services.llm import LLM_BASE_URL, voca_model
 from voca.services.srs import (
     VOCA_RATING_MAP,
     new_card_state,
@@ -38,6 +49,14 @@ from voca.services.supabase_client import supabase
 from voca.services.telemetry import configure_telemetry
 
 load_dotenv()
+
+# How much of the streamed tail may still be forming a leaked tool call
+# (`<tool_code>` head, `call:<name>`): hidden until it resolves into a span.
+_LEAK_HOLD = 24
+# Above this a markerless tail is presumed prose and flushed; a tail holding an
+# open tool-call marker (`call:show_panel{...blocks...}` can be very large)
+# is never flushed past the marker.
+_LEAK_PASSTHROUGH_CAP = 4000
 
 app = FastAPI(title="Voca Backend")
 
@@ -145,6 +164,58 @@ def fetch_recent_cards(
     return res.data or []
 
 
+def fetch_transcript(session_id: str, since: str | None = None) -> list[dict[str, Any]]:
+    """A session's chat turns (plus payload-bearing event rows) oldest first.
+
+    `since` (an ISO timestamp) keeps only rows at/after it. Chat turns stay
+    `speaker`/`text`; system event rows keep their `payload` so restore can
+    replay them.
+    """
+    res = (
+        supabase.table("transcripts")
+        .select("speaker, text, payload, created_at")
+        .eq("session_id", session_id)
+        .order("created_at")
+        .execute()
+    )
+    rows = res.data or []
+    if since is not None:
+        rows = [row for row in rows if (row.get("created_at") or "") >= since]
+    return rows
+
+
+def fetch_current_panel(session_id: str) -> dict[str, Any] | None:
+    """The panel currently on the learner's screen, from the transcript's panel
+    events (last `panel_shown`, minus superseding `panel_hidden`).
+
+    This is the same walk the UI performs over the persisted payloads; the
+    backend replays it so the tutor's prompt can carry the panel content and
+    stop re-showing panels that are already visible.
+    """
+    res = (
+        supabase.table("transcripts")
+        .select("payload")
+        .eq("session_id", session_id)
+        .order("created_at")
+        .execute()
+    )
+    current: dict[str, Any] | None = None
+    for row in res.data or []:
+        payload = row.get("payload") or {}
+        if not payload:
+            continue
+        kind = payload.get("kind")
+        if kind == "panel_shown":
+            panel = (payload.get("data") or {}).get("panel")
+            if isinstance(panel, dict) and panel.get("markdown"):
+                current = panel
+        elif kind == "panel_hidden" and current is not None:
+            hidden_id = payload.get("data", {}).get("panel_id") or ""
+            if not hidden_id or hidden_id == current.get("id"):
+                current = None
+    return current
+
+
 async def get_owned_session(session_id: str, user_id: str) -> dict[str, Any]:
     """A session row the user owns, raising 404 otherwise."""
     try:
@@ -165,14 +236,17 @@ async def get_owned_session(session_id: str, user_id: str) -> dict[str, Any]:
     return res.data
 
 
-def insert_transcript(session_id: str, speaker: str, text: str) -> None:
-    supabase.table("transcripts").insert(
-        {"session_id": session_id, "speaker": speaker, "text": text}
-    ).execute()
+def insert_transcript(
+    session_id: str, speaker: str, text: str, payload: dict[str, Any] | None = None
+) -> None:
+    row: dict[str, Any] = {"session_id": session_id, "speaker": speaker, "text": text}
+    if payload is not None:
+        row["payload"] = payload
+    supabase.table("transcripts").insert(row).execute()
 
 
 def sse(event: dict[str, Any]) -> str:
-    """Format one SSE frame; JSON-encoding keeps newlines inside deltas safe."""
+    """Format one SSE frame; JSON-encoding keeps newlines inside payloads safe."""
     return f"data: {json.dumps(event)}\n\n"
 
 
@@ -208,6 +282,61 @@ def harvest_new_cards(
             seen.update(forms)
             kept.append(card)
     return kept[:MAX_NEW_CARDS]
+
+
+# --- FSRS ------------------------------------------------------------------------------
+
+
+async def apply_fsrs_review(
+    card_id: str,
+    user_id: str,
+    session_id: str,
+    language: str | None,
+    outcome: str,
+    when: str | None = None,
+) -> None:
+    """Record one card review: update FSRS state and append a `card_reviews` row."""
+    rating = VOCA_RATING_MAP.get(outcome)
+    if rating is None:  # not_attempted or an unknown outcome label
+        return
+    res = await db(
+        supabase.table("cards")
+        .select("fsrs_data")
+        .eq("id", card_id)
+        .eq("user_id", user_id)
+        .maybe_single()
+    )
+    if not res.data:
+        return
+
+    now = when or datetime.now(UTC).isoformat()
+    current_state = res.data.get("fsrs_data") or new_card_state()
+    new_state, review_log = review_card_state(current_state, rating)
+    await db(
+        supabase.table("cards")
+        .update(
+            {
+                "fsrs_data": new_state,
+                "next_review": next_review(new_state).isoformat(),
+                "last_review": now,
+            }
+        )
+        .eq("id", card_id)
+    )
+    # Append the graded review to the log so progress metrics (positive recalls,
+    # review activity over time) exist; fsrs_data keeps no counts. `session_id`
+    # lets recaps show this session's per-card results.
+    await db(
+        supabase.table("card_reviews").insert(
+            {
+                "card_id": card_id,
+                "user_id": user_id,
+                "session_id": session_id,
+                "language": language,
+                **review_log,
+            }
+        )
+    )
 
 
 # --- Models ---------------------------------------------------------------------------
@@ -248,7 +377,7 @@ class TranslationResponse(BaseModel):
 
 
 translator_agent = Agent(
-    model=ollama_model,
+    model=voca_model,
     instructions="You are a professional translator. Return ONLY the translation, nothing else.",
 )
 
@@ -267,6 +396,154 @@ def pydantic_history(
         else:
             messages.append(ModelRequest(parts=[UserPromptPart(content=content)]))
     return messages
+
+
+# --- Tutor deps + SSE pump --------------------------------------------------------------
+
+
+async def build_tutor_deps(
+    user_id: str,
+    session_id: str,
+    language: str | None,
+    profile: dict[str, Any],
+    history: list[dict[str, Any]] | None,
+) -> TutorDeps:
+    """Everything the tutor agent needs for one streamed reply, plus its tool plumbing."""
+    events: asyncio.Queue = asyncio.Queue()
+
+    async def record_event(kind: str, data: dict[str, Any]) -> None:
+        try:
+            await asyncio.to_thread(
+                insert_transcript, session_id, "system", "", {"kind": kind, "data": data}
+            )
+        except Exception:
+            logger.exception("event persistence failed")
+
+    due_cards: list[dict[str, Any]] = []
+    try:
+        due_cards = compact_cards(await asyncio.to_thread(fetch_due_cards, user_id, language))
+    except Exception:
+        logger.exception("due-card fetch failed")
+    try:
+        current_panel = await asyncio.to_thread(fetch_current_panel, session_id)
+    except Exception:
+        logger.exception("current-panel fetch failed")
+        current_panel = None
+
+    deps: TutorDeps = {
+        "user_id": user_id,
+        "session_id": session_id,
+        "user_profile": profile,
+        "due_cards": due_cards,
+        "current_panel": current_panel,
+        "events": events,
+        "record_event": record_event,
+    }
+    return deps
+
+
+async def tutor_frames(
+    prompt: str,
+    history: list[ModelRequest | ModelResponse],
+    deps: TutorDeps,
+    session_id: str,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream one tutor reply as SSE-ready frames, interleaved with tool events.
+
+    Text deltas and events produced by the tutor's tools share one queue, so the
+    tool events arrive in order with the surrounding text. Tool calls that leak
+    through streaming as raw text (`call:<tool>{...}`) are captured, hidden from
+    the visible reply, and executed for real. The tutor's full text is persisted
+    as a transcript row even when the stream fails mid-way.
+    """
+    full_response = ""
+    queue = deps["events"]
+    producer: asyncio.Task | None = None
+    try:
+        async with tutor_agent.run_stream(prompt, message_history=history, deps=deps) as result:
+
+            async def emit(text: str) -> None:
+                if not text:
+                    return
+                nonlocal full_response
+                full_response += text
+                await queue.put({"type": "delta", "text": text})
+
+            async def consume():
+                pending = ""
+                try:
+                    async for delta in result.stream_text(delta=True):
+                        pending += delta
+                        while True:
+                            parsed = parse_tool_leak(pending)
+                            if not parsed:
+                                break
+                            before, name, args, consumed = parsed
+                            await emit(before)
+                            pending = pending[consumed:]
+                            logger.info("captured leaked tool call: %s (%s)", name, args)
+                            await execute_leaked(name, args, deps)
+                        # Hold back any tail that could still be a leak (gemma's
+                        # panel calls stream long block arrays — never flush past
+                        # the marker); only a long, markerless tail is prose.
+                        flush = len(pending)
+                        marker_idx = min(
+                            (
+                                idx
+                                for tag in ("call:", "<tool_code>")
+                                if (idx := pending.find(tag)) != -1
+                            ),
+                            default=-1,
+                        )
+                        if marker_idx == -1:
+                            if flush > _LEAK_PASSTHROUGH_CAP:
+                                await emit(pending)
+                                pending = ""
+                                flush = 0
+                        else:
+                            flush = marker_idx
+                        flush = max(flush - _LEAK_HOLD, 0)
+                        if flush:
+                            await emit(pending[:flush])
+                            pending = pending[flush:]
+                    # Stream over: flush the rest (executing a complete call if
+                    # its markup closed in the final delta).
+                    while True:
+                        parsed = parse_tool_leak(pending)
+                        if not parsed:
+                            break
+                        before, name, args, consumed = parsed
+                        await emit(before)
+                        pending = pending[consumed:]
+                        logger.info("captured leaked tool call: %s (%s)", name, args)
+                        await execute_leaked(name, args, deps)
+                    if pending.strip():
+                        await emit(pending)
+                finally:
+                    await queue.put(None)
+
+            producer = asyncio.ensure_future(consume())
+            while (event := await queue.get()) is not None:
+                yield event
+            await producer
+            producer = None
+    except Exception:
+        logger.exception("chat stream failed")
+        yield {"type": "error", "message": "The tutor hit an unexpected error. Please try again."}
+    finally:
+        if producer is not None:
+            producer.cancel()
+        if full_response:
+            await asyncio.to_thread(insert_transcript, session_id, "tutor", full_response)
+
+
+def sse_stream(frames: AsyncIterator[dict[str, Any]]) -> StreamingResponse:
+    async def stream():
+        async for frame in frames:
+            yield sse(frame)
+        yield sse({"type": "done"})
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
 
 
 # --- Routes ---------------------------------------------------------------------------
@@ -311,7 +588,7 @@ async def list_sessions(
                 language=session.get("language"),
             )
             for session in (res.data or [])
-        ]
+        ],
     )
 
 
@@ -342,38 +619,6 @@ async def start_session(user=Depends(get_current_user)):
     )
 
 
-@app.post("/sessions/plan")
-async def plan_session(request: SessionActionRequest, user=Depends(get_current_user)):
-    session = await get_owned_session(request.session_id, user.id)
-    if session["status"] != "active":
-        raise HTTPException(status_code=409, detail="Session has already ended")
-
-    session_language = session.get("language")
-    profile, due_cards = await asyncio.gather(
-        asyncio.to_thread(fetch_effective_profile, user.id, session_language),
-        asyncio.to_thread(fetch_due_cards, user.id, session_language),
-    )
-
-    result = await session_planner_agent.run(
-        "Plan the session.",
-        deps={
-            "user_id": user.id,
-            "user_profile": profile,
-            "due_cards": compact_cards(due_cards),
-        },
-    )
-    plan = result.output
-
-    # Keep only selections that are actually due cards, and resolve their
-    # content into the stored plan so /chat never has to re-query cards.
-    by_id = {card["id"]: card for card in due_cards}
-    selected_cards = compact_cards([by_id[cid] for cid in plan.card_ids if cid in by_id])
-    plan_payload = {**plan.model_dump(), "cards": selected_cards}
-
-    await db(supabase.table("sessions").update({"plan": plan_payload}).eq("id", session["id"]))
-    return plan_payload
-
-
 @app.post("/sessions/end")
 async def end_session(request: SessionActionRequest, user=Depends(get_current_user)):
     """Mark the session completed and run the post-session analyst."""
@@ -384,15 +629,17 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
 
     transcript = await db(
         supabase.table("transcripts")
-        .select("speaker, text")
+        .select("speaker, text, payload")
         .eq("session_id", session["id"])
         .order("created_at")
     )
     language = session.get("language")
-    due_cards, existing_cards = await asyncio.gather(
-        asyncio.to_thread(fetch_due_cards, user.id, language),
-        asyncio.to_thread(fetch_recent_cards, user.id, language),
-    )
+    # The analyst sees every due card: its FSRS rubric maps the whole transcript
+    # (whatever the conversation touched — panel exercises, review weaving,
+    # casual usage) to card statuses.
+    due_rows = await asyncio.to_thread(fetch_due_cards, user.id, language)
+    due_cards = compact_cards(due_rows)
+    existing_cards = await asyncio.to_thread(fetch_recent_cards, user.id, language)
 
     result = await post_session_agent.run(
         "Analyze the session and generate cards and recap.",
@@ -400,10 +647,9 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
             "user_id": user.id,
             "session_id": session["id"],
             "transcript": transcript.data or [],
-            "due_cards": compact_cards(due_cards),
+            "due_cards": due_cards,
             "existing_cards": existing_cards,
             "target_language": language,
-            "session_plan": session.get("plan"),
         },
     )
     analysis = result.output
@@ -438,48 +684,7 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
         )
 
     for review in analysis.reviewed_cards:
-        rating = VOCA_RATING_MAP.get(review.outcome)
-        if rating is None:  # not_attempted or an unknown outcome label
-            continue
-
-        res = await db(
-            supabase.table("cards")
-            .select("fsrs_data")
-            .eq("id", review.card_id)
-            .eq("user_id", user.id)
-            .maybe_single()
-        )
-        if not res.data:
-            continue
-
-        current_state = res.data.get("fsrs_data") or new_card_state()
-        new_state, review_log = review_card_state(current_state, rating)
-        await db(
-            supabase.table("cards")
-            .update(
-                {
-                    "fsrs_data": new_state,
-                    "next_review": next_review(new_state).isoformat(),
-                    "last_review": now,
-                }
-            )
-            .eq("id", review.card_id)
-        )
-        # Append the graded review to the log so progress metrics (positive
-        # recalls, review activity over time) exist; fsrs_data keeps no counts.
-        # `session_id` lets recaps show the plan's chosen cards and this
-        # session's per-card results.
-        await db(
-            supabase.table("card_reviews").insert(
-                {
-                    "card_id": review.card_id,
-                    "user_id": user.id,
-                    "session_id": session["id"],
-                    "language": language,
-                    **review_log,
-                }
-            )
-        )
+        await apply_fsrs_review(review.card_id, user.id, session["id"], language, review.outcome)
 
     profile_updates = analysis.profile_updates.model_dump(exclude_none=True)
     if profile_updates:
@@ -501,6 +706,23 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
     # Always present so the recap page can render review material without
     # re-querying the cards table (empty when nothing was created).
     recap["new_cards"] = [{"type": c.type, "front": c.front, "back": c.back} for c in new_cards]
+    # The review scorecard: FSRS rating per reviewed word (rating is null for
+    # `not_attempted` — no review was logged). The recap page renders these as
+    # bare icons with the rating on hover; no schedules, no explanations.
+    due_by_id = {row.get("id"): row for row in due_rows}
+    recap["reviewed_cards"] = []
+    for review in analysis.reviewed_cards:
+        card_row = due_by_id.get(review.card_id)
+        if card_row is None:
+            continue  # never showcase a grade outside the due-card slate
+        rating = VOCA_RATING_MAP.get(review.outcome)
+        entry = {
+            "front": card_row.get("front") or "",
+            "back": card_row.get("back") or "",
+            "rating": int(rating) if rating is not None else None,
+        }
+        if not any(item["front"] == entry["front"] for item in recap["reviewed_cards"]):
+            recap["reviewed_cards"].append(entry)
     await db(supabase.table("sessions").update({"recap": recap}).eq("id", session["id"]))
 
     return {
@@ -525,46 +747,21 @@ async def chat(request: ChatRequest, user=Depends(get_current_user)):
     session = await get_owned_session(request.session_id, user.id)
     if session["status"] != "active":
         raise HTTPException(status_code=409, detail="Session has already ended")
-    profile = await asyncio.to_thread(fetch_effective_profile, user.id, session.get("language"))
+    language = session.get("language")
+    profile = await asyncio.to_thread(fetch_effective_profile, user.id, language)
 
     # Record the user's turn before responding so a mid-stream failure cannot lose it.
     await asyncio.to_thread(insert_transcript, session["id"], "user", request.message)
 
-    # The plan's opening hook steers only the first reply; later turns already
-    # have history, so drop it to avoid a re-greeting mid-session.
-    plan: dict[str, Any] | None = session.get("plan")
-    if plan and request.history:
-        plan = {key: value for key, value in plan.items() if key != "opening_hook"}
+    deps = await build_tutor_deps(user.id, session["id"], language, profile, request.history)
 
-    deps: TutorDeps = {
-        "user_id": user.id,
-        "user_profile": profile,
-        "session_id": session["id"],
-        "session_plan": plan,
-    }
-    history = pydantic_history(request.history)
+    async def frames():
+        async for frame in tutor_frames(
+            request.message, pydantic_history(request.history), deps, session["id"]
+        ):
+            yield frame
 
-    async def event_generator():
-        full_response = ""
-        try:
-            async with tutor_agent.run_stream(
-                request.message, message_history=history, deps=deps
-            ) as result:
-                async for delta in result.stream_text(delta=True):
-                    full_response += delta
-                    yield sse({"type": "delta", "text": delta})
-        except Exception:
-            logger.exception("chat stream failed")
-            yield sse(
-                {"type": "error", "message": "The tutor hit an unexpected error. Please try again."}
-            )
-        finally:
-            # Save whatever the tutor produced, even if the stream failed mid-way.
-            if full_response:
-                await asyncio.to_thread(insert_transcript, session["id"], "tutor", full_response)
-        yield sse({"type": "done"})
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    return sse_stream(frames())
 
 
 if __name__ == "__main__":
