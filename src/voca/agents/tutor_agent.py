@@ -88,9 +88,14 @@ def tutor_system_prompt(ctx: RunContext[TutorDeps]) -> str:
         "genuinely helps — a menu you are role-playing from, a text to read, a "
         "dialogue script to study, comprehension questions, a word bank, practice "
         "tasks. The tool takes ONE markdown string: compose the content directly "
-        "in markdown (headings, lists, tables, whatever the content needs). Keep "
-        "the panel's content OUT of your chat turns: point at it ('mira el panel') "
-        "and ask about it. A new call REPLACES the panel; `hide_panel` closes it.\n",
+        "in markdown (headings, lists, tables, whatever the content needs). Each "
+        "call ADDS a new tab on the panel and focuses it — the learner sees the "
+        "newest tab, and earlier tabs stay open beside it. Keep the panel's "
+        "content OUT of your chat turns: point at it ('mira el panel') and ask "
+        "about it. Do not re-show identical content: the panel persists across "
+        "turns. `hide_panel` FOLDS the whole panel away to the side (the learner "
+        "can reopen it) — call it once the content is no longer relevant, and "
+        "never merely SAY you folded it.\n",
         "TWO HARD RULES ABOUT THE PANEL:\n"
         "1. NEVER CLAIM WITHOUT CALLING. Do not say 'He escrito…', 'Puedes leer…', "
         "'lo ves en el panel' or anything similar unless you actually called "
@@ -108,10 +113,10 @@ def tutor_system_prompt(ctx: RunContext[TutorDeps]) -> str:
             "THE CURRENT PANEL (already on the learner's screen):\n"
             f"TITLE: {current_panel.get('title', 'Panel')}\n"
             f"CONTENT:\n{markdown}\n"
-            "This panel persists across turns — the learner can still see it as you "
-            "speak. Do NOT call `show_panel` again for this same content; call it "
-            "only to REPLACE it with materially different content, and call "
-            "`hide_panel` once it is no longer relevant.\n"
+            "This tab persists across turns — the learner can still see it as you "
+            "speak. Do NOT call `show_panel` again for this same content; each "
+            "`show_panel` call opens a NEW tab, so use one only for materially "
+            "different content, and call `hide_panel` once the topics are done.\n"
         )
     due = deps.get("due_cards", [])
     if due:
@@ -135,14 +140,14 @@ async def _push_event(deps: TutorDeps, kind: str, data: dict) -> None:
 
 @tutor_agent.tool
 async def show_panel(ctx: RunContext[TutorDeps], title: str, markdown: str) -> str:
-    """Show content on the learner's side panel (canvas).
+    """Add content to the learner's side panel (canvas) as a new focused tab.
 
     Call whenever visual content genuinely helps the conversation: a menu, a
     flyer, a schedule table, a text to read, a dialogue script, questions,
     word banks, or practice tasks. `title` is a short display heading; the
     content itself is ONE markdown string — compose lists, tables, paragraphs
-    and whatever the content needs directly in markdown. A new call replaces
-    the panel that is showing.
+    and whatever the content needs directly in markdown. Each call adds a new
+    tab (earlier tabs stay available); the content is not duplicated from chat.
     """
     deps = ctx.deps
     # Escape decode + title fallback; empty markdown gets a corrective ack so
@@ -159,19 +164,26 @@ async def show_panel(ctx: RunContext[TutorDeps], title: str, markdown: str) -> s
     deps["current_panel_id"] = panel["id"]
     deps["current_panel"] = panel
     await _push_event(deps, "panel_shown", {"panel": panel})
-    return "(Call accepted: the panel now carries that content. Point at it in chat — never name a screen position.)"
+    return (
+        "(Call accepted: the content is on the panel as the newest tab. Point at "
+        "it in chat — never name a screen position.)"
+    )
 
 
 @tutor_agent.tool
 async def hide_panel(ctx: RunContext[TutorDeps]) -> str:
-    """Close the panel that is currently showing."""
+    """Fold the panel away to the side (the learner can reopen it).
+
+    Call once the panel's content is no longer relevant to the conversation.
+    The artifacts stay available; the panel just collapses out of the way.
+    """
     deps = ctx.deps
     # Panel state lives in the UI's event walk (per-turn deps cannot track it),
-    # so hiding always pushes; an empty id means "whatever is showing".
+    # so folding always pushes; an empty id means "whatever is showing".
     deps["current_panel_id"] = None
     deps["current_panel"] = None
     await _push_event(deps, "panel_hidden", {"panel_id": ""})
-    return "(Call accepted: the panel is hidden. Continue the conversation.)"
+    return "(Call accepted: the panel is folded away. Continue the conversation.)"
 
 
 def build_panel(title: str, markdown: str) -> dict[str, Any] | None:

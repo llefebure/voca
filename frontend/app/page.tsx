@@ -24,7 +24,8 @@ import { useLanguage } from '@/components/language-context'
 import { useSpeech } from '@/lib/use-speech'
 import { DashboardLayout } from '@/components/dashboard-layout'
 import { Markdown } from '@/components/markdown'
-import { PanelCanvas, PanelRecord } from '@/components/panel/panel-components'
+import { PanelPane } from '@/components/panel/panel-components'
+import { cn } from 'cn'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -155,8 +156,15 @@ function ChatView({
   const [ending, setEnding] = React.useState(false)
   const [confirmEnd, setConfirmEnd] = React.useState(false)
   const [sessionId, setSessionId] = React.useState<string | null>(null)
-  // Panels the user folded away with the canvas ✕ (server history unaffected).
-  const [dismissedPanelIds, setDismissedPanelIds] = React.useState<Set<string>>(() => new Set())
+  // Panel pane UI state (which tab, folded or not). It carries a walk
+  // sequence: user choices hold only until the next panel event, which takes
+  // the derived state back over (a new show expands + focuses, a tutor fold
+  // collapses).
+  const [panelUi, setPanelUi] = React.useState<{
+    seq: number
+    collapsed?: boolean
+    activeIndex?: number
+  }>({ seq: -1 })
   const sessionIdRef = React.useRef<string | null>(null)
   const lastSpokenRef = React.useRef<string | null>(null)
   // Synchronous guard for Enter-key double submits: state alone can lag one render.
@@ -212,29 +220,54 @@ function ChatView({
   }, [messages])
 
   /**
-   * The canvas panel drive: the latest `panel_shown` that has not been hidden
-   * by the tutor (panel_hidden) nor folded away by the user (dismissed).
+   * The panel drive, additive: every `panel_shown` becomes a tab (a re-show of
+   * the same id replaces that tab's content); `panel_hidden` folds the pane
+   * away (the learner can reopen). `seq` bumps on each panel event so user UI
+   * choices can be invalidated when the tutor moves the panel.
    */
-  const activePanel: PanelInstance | null = React.useMemo(() => {
-    let current: PanelInstance | null = null
+  const panelWalk = React.useMemo(() => {
+    const panels: PanelInstance[] = []
+    const indexOf = new Map<string, number>()
+    let focusId: string | null = null
+    let tutorCollapsed = false
+    let seq = 0
     for (const { part } of entries) {
       if (part.type === 'data-panel_shown') {
         const panel = cleanEscapedText(part.data.panel)
-        if (typeof panel.markdown === 'string') current = panel
-      } else if (part.type === 'data-panel_hidden' && current) {
-        // The tutor's hide targets whatever is showing: an empty or matching id.
-        const hiddenId = part.data.panel_id
-        if (!hiddenId || hiddenId === current.id) current = null
+        if (typeof panel.markdown !== 'string') continue // legacy content shapes: skip
+        const existingIndex = indexOf.get(panel.id)
+        if (existingIndex === undefined) {
+          indexOf.set(panel.id, panels.length)
+          panels.push(panel)
+        } else {
+          panels[existingIndex] = panel // same id re-shown: replace that tab's content
+        }
+        focusId = panel.id
+        tutorCollapsed = false // a (re)show expands the pane
+        seq += 1
+      } else if (part.type === 'data-panel_hidden') {
+        tutorCollapsed = true // the tutor folds the pane away
+        seq += 1
       }
     }
-    return current && !dismissedPanelIds.has(current.id) ? current : null
-  }, [entries, dismissedPanelIds])
+    return { panels, focusId, tutorCollapsed, seq }
+  }, [entries])
+
+  // Effective pane state: tutor-derived unless the user picked something for
+  // THIS walk state (their choice holds until the next panel event).
+  const ui = panelUi.seq === panelWalk.seq ? panelUi : { seq: panelWalk.seq }
+  const panelCollapsed = ui.collapsed ?? panelWalk.tutorCollapsed
+  const panelActiveIndex = ui.activeIndex ?? Math.min(
+    Math.max(panelWalk.panels.findIndex((panel) => panel.id === panelWalk.focusId), 0),
+    Math.max(panelWalk.panels.length - 1, 0),
+  )
+  function setPanelPaneUi(update: { collapsed?: boolean; activeIndex?: number }) {
+    setPanelUi({ seq: panelWalk.seq, ...update })
+  }
+  const hasPanels = panelWalk.panels.length > 0
 
   /** Renderable node for one walked part; null skips it (empty/absorbed parts). */
-  function renderEntry(
-    entry: (typeof entries)[number],
-    context: 'main' | 'canvas',
-  ): React.ReactNode {
+  function renderEntry(entry: (typeof entries)[number]): React.ReactNode {
     const { part, message, messageIndex, partIndex } = entry
     if (part.type === 'text') {
       const text = part.text
@@ -285,18 +318,10 @@ function ChatView({
         </React.Fragment>
       )
     }
-    if (part.type === 'data-panel_shown') {
-      if (context === 'canvas') return null // the canvas shows the active panel
-      const panel = cleanEscapedText(part.data.panel)
-      if (activePanel?.id === panel.id) return null // currently on the canvas
-      return (
-        <PanelRecord
-          key={`panel-${messageIndex}-${partIndex}`}
-          panel={panel}
-        />
-      )
+    if (part.type === 'data-panel_shown' || part.type === 'data-panel_hidden') {
+      // Absorbed by the panel pane — artifacts never render inline in the log.
+      return null
     }
-    if (part.type === 'data-panel_hidden') return null // absorbed by the walk
     // `data-status` parts render via the chip.
     return null
   }
@@ -383,7 +408,7 @@ function ChatView({
           })
         }
         setMessages(restored)
-        setDismissedPanelIds(new Set()) // the replayed canvas re-opens
+        setPanelUi({ seq: -1 }) // the replayed walk drives the pane afresh
         const last = restored[restored.length - 1]
         lastSpokenRef.current = last?.id ?? null // do not re-speak restored history
         // Clean the URL so reloads start fresh instead of re-entering this flow.
@@ -472,7 +497,7 @@ function ChatView({
     sessionIdRef.current = null
     lastSpokenRef.current = null
     setMessages([])
-    setDismissedPanelIds(new Set())
+    setPanelUi({ seq: -1 })
   }
 
   async function endSession() {
@@ -490,7 +515,7 @@ function ChatView({
       setSessionId(null)
       setMessages([])
       setInput('')
-      setDismissedPanelIds(new Set())
+      setPanelUi({ seq: -1 })
       const {
         data: { session },
       } = await supabase.auth.getSession()
@@ -538,23 +563,29 @@ function ChatView({
       }
     >
       <div className="relative flex h-full w-full flex-col">
-      {/* The content region splits into two flush rectangles when a panel is
-          showing: the chat pane and the canvas pane together fill the full
-          rectangle (divider line between them), rather than the panel floating
-          inside the chat column. */}
+      {/* The content region splits into two flush rectangles whenever panel
+          artifacts exist: the chat pane and the canvas pane together fill the
+          full rectangle (divider line between them). The pane is additive
+          (tabs per artifact) and folds to a rail at the user's or the tutor's
+          request. */}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        {activePanel ? (
+        {hasPanels ? (
           <>
             <div className="flex min-h-0 flex-1 flex-col px-8">
               <MessageThread entries={entries} status={status} />
             </div>
-            <div className="flex min-h-[45vh] w-full shrink-0 flex-col border-t bg-card md:h-full md:w-[420px] md:border-t-0 md:border-l">
-              <PanelCanvas
-                panel={activePanel}
-                flush
-                onClose={() =>
-                  setDismissedPanelIds((prev) => new Set([...prev, activePanel.id]))
-                }
+            <div
+              className={cn(
+                'flex w-full shrink-0 flex-col border-t md:h-full md:border-t-0 md:border-l',
+                panelCollapsed ? 'w-11' : 'w-full md:w-[420px]',
+              )}
+            >
+              <PanelPane
+                panels={panelWalk.panels}
+                activeIndex={panelActiveIndex}
+                onSelect={(index) => setPanelPaneUi({ activeIndex: index })}
+                collapsed={panelCollapsed}
+                onToggleCollapse={() => setPanelPaneUi({ collapsed: !panelCollapsed })}
               />
             </div>
           </>
@@ -563,13 +594,13 @@ function ChatView({
             <Empty className="flex-1">
               <EmptyHeader>
                 <EmptyMedia variant="icon">
-                  <LanguagesIcon />
-                </EmptyMedia>
-                <EmptyTitle>Ready to practice?</EmptyTitle>
-                <EmptyDescription>
-                  Start a conversation in {languageName(targetLanguage)} — chat casually, and your
-                  tutor will put menus, scripts, or exercises on the side panel whenever they help.
-                </EmptyDescription>
+                <LanguagesIcon />
+              </EmptyMedia>
+              <EmptyTitle>Ready to practice?</EmptyTitle>
+              <EmptyDescription>
+                Start a conversation in {languageName(targetLanguage)} — chat casually, and your
+                tutor will put menus, scripts, or exercises on the side panel whenever they help.
+              </EmptyDescription>
               </EmptyHeader>
             </Empty>
           </div>
@@ -680,7 +711,7 @@ function ChatView({
     const chip = streamingStatusChip(groups, status)
     const rendered = groups
       .map((group, groupIndex) => {
-        const nodes = group.parts.map((entry) => renderEntry(entry, 'main'))
+        const nodes = group.parts.map((entry) => renderEntry(entry))
         if (nodes.every((node) => node === null)) return null
         const isUser = group.message.role === 'user'
         return (

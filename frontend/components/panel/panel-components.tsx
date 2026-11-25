@@ -1,13 +1,13 @@
 'use client'
 
-// Panel components: the visual layer of the tutor's canvas. The side panel
-// (split view) while a panel is showing, plus the collapsed chat-thread
-// records of past panels. Content is plain markdown, composed by the tutor.
+// Panel components: the visual layer of the tutor's canvas. The side pane is
+// additive: every artifact becomes a tab (newest focused), and it can fold
+// away to a slim rail — the learner reopens it from there. Content is plain
+// markdown, composed by the tutor.
 
-import { ChevronDownIcon, PanelRightIcon, XIcon } from 'lucide-react'
+import { ChevronLeftIcon, ChevronRightIcon, PanelRightIcon } from 'lucide-react'
 import * as React from 'react'
 
-import { Button } from '@/components/ui/button'
 import { Markdown } from '@/components/markdown'
 import type { PanelInstance } from '@/lib/panel-events'
 import { cleanEscapedText } from '@/lib/panel-events'
@@ -19,86 +19,98 @@ export function displayPanel(panel: PanelInstance): PanelInstance {
 }
 
 /**
- * The canvas: the side pane of the split view while a panel is showing. The
- * chat keeps flowing next to it; the ✕ dismisses the split view (the panel's
- * chat record stays). `flush` renders the pane edge-to-edge for the full-bleed
- * two-rectangle split (the parent carries the divider); the default is a
- * self-contained card.
+ * The side pane of the split view. Expanded: a tab bar (one tab per
+ * generated artifact, shown only when there are several) atop the focused
+ * artifact's markdown, with a fold button. Collapsed: a slim rail with the
+ * focused artifact's title on its side; clicking reopens.
  */
-export function PanelCanvas({
-  panel,
-  onClose,
-  flush = false,
+export function PanelPane({
+  panels,
+  activeIndex,
+  onSelect,
+  collapsed,
+  onToggleCollapse,
 }: {
-  panel: PanelInstance
-  onClose?: () => void
-  flush?: boolean
+  panels: PanelInstance[]
+  activeIndex: number
+  onSelect: (index: number) => void
+  collapsed: boolean
+  onToggleCollapse: () => void
 }) {
-  const display = displayPanel(panel)
+  const active = panels[Math.min(Math.max(activeIndex, 0), panels.length - 1)]
   return (
     <div
-      className={cn(
-        'flex min-h-0 flex-1 flex-col',
-        flush ? '' : 'max-h-full rounded-xl border border-primary/30 bg-card shadow-sm',
-      )}
-      data-testid="panel-canvas"
+      className="flex min-h-0 flex-1 flex-col bg-card"
+      data-testid="panel-pane"
+      data-collapsed={collapsed ? 'true' : 'false'}
     >
-      <div
-        className={cn(
-          'flex items-center gap-2 border-b',
-          flush ? 'py-2.5 pl-4 pr-3' : 'pt-3 pb-2 px-4',
-        )}
-      >
-        <PanelRightIcon className="text-primary size-3.5" />
-        <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-sm font-medium">{display.title}</span>
-        </div>
-        {onClose ? (
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            onClick={onClose}
-            aria-label="Close panel"
-            data-testid="panel-close"
+      {collapsed ? (
+        // The folded rail: full-height, click to reopen.
+        <button
+          type="button"
+          className="flex h-full w-11 flex-col items-center gap-3 py-3 text-muted-foreground transition-colors hover:text-foreground"
+          onClick={onToggleCollapse}
+          aria-label="Reopen panel"
+          data-testid="panel-rail"
+        >
+          <ChevronLeftIcon className="size-4" />
+          <PanelRightIcon className="size-4 shrink-0" />
+          <span
+            className="text-xs font-medium tracking-wide"
+            style={{ writingMode: 'vertical-rl' }}
           >
-            <XIcon />
-          </Button>
-        ) : null}
-      </div>
-      <div className="flex-1 overflow-y-auto px-4 py-3">
-        <Markdown breaks className="prose-invert-none">{display.markdown}</Markdown>
-      </div>
-    </div>
-  )
-}
-
-/**
- * The chat-thread record of a past panel: a collapsed bar (title) that expands
- * to its content. Collapsed by default; the currently-shown panel renders in
- * the canvas instead of a record (the caller decides).
- */
-export function PanelRecord({ panel, expanded = false }: { panel: PanelInstance; expanded?: boolean }) {
-  const [open, setOpen] = React.useState(expanded)
-  const display = displayPanel(panel)
-  return (
-    <div className="w-full max-w-[520px]" data-testid="panel-record">
-      <button
-        type="button"
-        className="flex w-full items-center justify-between gap-2 rounded-lg border border-primary/20 bg-card/60 px-3 py-2 text-left transition-colors hover:bg-card"
-        onClick={() => setOpen((prev) => !prev)}
-        aria-expanded={open}
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          <PanelRightIcon className="text-primary size-3.5 shrink-0" />
-          <span className="truncate text-sm font-medium">{display.title}</span>
-        </span>
-        <ChevronDownIcon className={`size-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open ? (
-        <div className="pt-2">
-          <Markdown breaks className="prose-invert-none">{display.markdown}</Markdown>
-        </div>
-      ) : null}
+            {active?.title ?? 'Panel'}
+            {panels.length > 1 ? ` (${panels.length})` : ''}
+          </span>
+        </button>
+      ) : (
+        <>
+          <div className="flex items-center gap-1 border-b py-2.5 pl-4 pr-2">
+            {panels.length > 1 ? (
+              <div className="flex min-w-0 flex-1 flex-wrap gap-1" role="tablist" aria-label="Panel artifacts">
+                {panels.map((panel, index) => (
+                  <button
+                    key={panel.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={index === activeIndex}
+                    data-testid={`panel-tab-${index}`}
+                    className={cn(
+                      'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                      index === activeIndex
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                    onClick={() => onSelect(index)}
+                  >
+                    <PanelRightIcon className="size-3 shrink-0" />
+                    <span className="max-w-[170px] truncate">{panel.title}</span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                <PanelRightIcon className="size-3.5 shrink-0" />
+                <span className="truncate">{active?.title}</span>
+              </div>
+            )}
+            <button
+              type="button"
+              className="rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
+              onClick={onToggleCollapse}
+              aria-label="Fold panel to the side"
+              data-testid="panel-collapse"
+            >
+              <ChevronRightIcon className="size-4" />
+            </button>
+          </div>
+          {active ? (
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+              <Markdown breaks className="prose-invert-none">{displayPanel(active).markdown}</Markdown>
+            </div>
+          ) : null}
+        </>
+      )}
     </div>
   )
 }

@@ -105,7 +105,7 @@ def test_tutor_prompt_carries_the_current_panel():
     prompt = tutor_system_prompt(_StubRunContext(tutor_deps(current_panel=panel)))
     assert "THE CURRENT PANEL" in prompt and "El cuento de Mateo" in prompt
     assert "Un ingeniero…" in prompt
-    assert "persists across turns" in prompt and "only to REPLACE" in prompt
+    assert "persists across turns" in prompt and "opens a NEW tab" in prompt
     # A panel in context tightens the rules; without one the prompt stays neutral.
     plain = tutor_system_prompt(_StubRunContext(tutor_deps()))
     assert "THE CURRENT PANEL" not in plain
@@ -164,7 +164,7 @@ async def test_hide_panel_closes_the_current_panel():
     deps = tutor_deps(record_event=_record(recorded))
     await show_panel(_StubRunContext(deps), "Menu", MENU_MARKDOWN)
     result = await hide_panel(_StubRunContext(deps))
-    assert "hidden" in result
+    assert "folded away" in result
     hidden = (await drained(deps["events"]))[-1]
     assert hidden["kind"] == "panel_hidden"
     assert hidden["data"]["panel_id"] == ""  # the UI's walk targets whatever shows
@@ -177,7 +177,7 @@ async def test_hide_panel_always_pushes_even_without_a_panel():
     the walk on the client decides whether anything closes."""
     deps = tutor_deps()
     result = await hide_panel(_StubRunContext(deps))
-    assert "hidden" in result
+    assert "folded away" in result
     events = await drained(deps["events"])
     assert events[-1]["kind"] == "panel_hidden"
 
