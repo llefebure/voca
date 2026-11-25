@@ -677,6 +677,7 @@ function ChatView({
       if (last && last.message.id === entry.message.id) last.parts.push(entry)
       else groups.push({ message: entry.message, parts: [entry] })
     }
+    const chip = streamingStatusChip(groups, status)
     const rendered = groups
       .map((group, groupIndex) => {
         const nodes = group.parts.map((entry) => renderEntry(entry, 'main'))
@@ -699,7 +700,6 @@ function ChatView({
         )
       })
       .filter(Boolean)
-    const chip = streamingStatusChip(threadEntries as unknown as ChipEntry[], status)
     return (
       <div className="flex min-h-0 flex-1 flex-col">
         <MessageScrollerProvider autoScroll>
@@ -732,17 +732,28 @@ function ChatView({
   }
 }
 
-type ChipEntry = { part: { type: string; text?: string; data?: { text?: string } } }
+type MessageGroup = { message: VocaUIMessage; parts: { part: VocaUIMessage['parts'][number] }[] }
 
-/** Waiting chip for the stream (submitted + pre-text streaming). */
-function streamingStatusChip(threadEntries: ChipEntry[], chatStatus: ChatStatus): string | null {
-  const waiting = chatStatus === 'submitted' || chatStatus === 'streaming'
-  if (!waiting) return null
-  const lastText = [...threadEntries].reverse().find((entry) => entry.part.type === 'text')
-  if (!lastText) return 'Thinking…'
-  if ((lastText.part.text ?? '').trim()) return null
-  const dataStatus = [...threadEntries]
+/**
+ * The waiting chip covers a still-empty assistant turn — and nothing else:
+ * once the newest assistant message carries rendered content (text or a
+ * panel), any tool chip is stale and yields. Before streaming starts, it's
+ * just "Thinking…".
+ */
+function streamingStatusChip(groups: MessageGroup[], chatStatus: ChatStatus): string | null {
+  if (chatStatus !== 'submitted' && chatStatus !== 'streaming') return null
+  const last = groups[groups.length - 1]
+  if (!last || last.message.role !== 'assistant') return 'Thinking…'
+  const hasContent = last.parts.some(
+    (entry) =>
+      (entry.part.type === 'text' && (entry.part as { text: string }).text.trim()) ||
+      entry.part.type === 'data-panel_shown',
+  )
+  if (hasContent) return null
+  const status = [...last.parts]
     .reverse()
     .find((entry) => entry.part.type === 'data-status')
-  return dataStatus?.part.data?.text ?? 'Thinking…'
+  return ((status?.part as { data?: { text?: string } } | undefined)?.data?.text ?? '')
+    ? (status?.part as { data: { text: string } }).data.text
+    : 'Thinking…'
 }

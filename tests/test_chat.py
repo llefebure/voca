@@ -250,10 +250,7 @@ async def test_chat_pumps_tool_events_into_the_stream(client, monkeypatch, fake_
         "tutor_agent",
         ToolEventTutorAgent(
             ["Have a look at the card."],
-            [
-                {"type": "status", "text": "Preparing your panel…"},
-                {"type": "event", "kind": "panel_shown", "data": {"panel": panel}},
-            ],
+            [{"type": "event", "kind": "panel_shown", "data": {"panel": panel}}],
         ),
     )
 
@@ -261,8 +258,8 @@ async def test_chat_pumps_tool_events_into_the_stream(client, monkeypatch, fake_
         "/chat", json={"message": "sounds good", "session_id": "sess-1"}, headers=AUTH
     )
     events = sse_events(response.text)
-    statuses = [event.get("text") for event in events if event["type"] == "status"]
-    assert statuses == ["Preparing your panel…"]
+    # Panels give their own feedback; no transient status chip exists.
+    assert [event for event in events if event["type"] == "status"] == []
     structured = [event for event in events if event["type"] == "event"]
     assert structured[0]["kind"] == "panel_shown"
     assert structured[0]["data"]["panel"]["id"] == panel["id"]
@@ -359,8 +356,7 @@ async def test_chat_captures_leaked_tool_call_into_a_real_event(client, monkeypa
         "/chat", json={"message": "jaja sí", "session_id": "sess-1"}, headers=AUTH
     )
     events = sse_events(response.text)
-    statuses = [event["text"] for event in events if event["type"] == "status"]
-    assert statuses == ["Preparing your panel…"]
+    assert [event for event in events if event["type"] == "status"] == []
     structured = [event for event in events if event["type"] == "event"]
     assert structured and structured[0]["kind"] == "panel_shown"
     panel = structured[0]["data"]["panel"]

@@ -126,10 +126,6 @@ def _cards_text(cards: list[dict]) -> str:
 # --- Tools ---------------------------------------------------------------------------
 
 
-async def _push_status(deps: TutorDeps, text: str) -> None:
-    await deps["events"].put({"type": "status", "text": text})
-
-
 async def _push_event(deps: TutorDeps, kind: str, data: dict) -> None:
     await deps["events"].put({"type": "event", "kind": kind, "data": data})
     record_event = deps.get("record_event")
@@ -157,7 +153,9 @@ async def show_panel(ctx: RunContext[TutorDeps], title: str, markdown: str) -> s
             "(The panel call was rejected: the markdown content was empty. Call "
             "show_panel again with the actual content in the markdown argument.)"
         )
-    await _push_status(deps, "Preparing your panel…")
+    # No status chip: the panel event itself lands a moment later and is all
+    # the feedback the learner needs (a tool chip would linger under a panel
+    # that is already visible while the model writes its follow-up).
     deps["current_panel_id"] = panel["id"]
     deps["current_panel"] = panel
     await _push_event(deps, "panel_shown", {"panel": panel})

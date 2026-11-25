@@ -119,9 +119,10 @@ async def test_show_panel_tool_pushes_and_persists_event():
     deps = tutor_deps(record_event=_record(recorded))
     result = await show_panel(_StubRunContext(deps), "Carta del día", MENU_MARKDOWN)
     assert "Call accepted" in result
+    # The panel event is the only feedback: no transient status chip.
     events = await drained(deps["events"])
-    assert events[0] == {"type": "status", "text": "Preparing your panel…"}
-    shown = events[1]
+    assert [e for e in events if e["type"] == "status"] == []
+    shown = events[0]
     assert shown["type"] == "event" and shown["kind"] == "panel_shown"
     panel = shown["data"]["panel"]
     assert panel["title"] == "Carta del día"
@@ -142,7 +143,7 @@ def _record(recorded: list) -> Any:
 async def test_show_panel_decodes_escaped_newlines():
     deps = tutor_deps()
     await show_panel(_StubRunContext(deps), "Carta", "**Tacos**\\n\\n| Plato |\\n| :--- |")
-    shown = (await drained(deps["events"]))[1]
+    shown = (await drained(deps["events"]))[0]
     markdown = shown["data"]["panel"]["markdown"]
     assert "\\n" not in markdown and "\n\n" in markdown
 
