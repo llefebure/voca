@@ -57,6 +57,7 @@ frontend/tests/      # Vitest + RTL suite (offline: supabase + backend fetch moc
 - When touching something only the real browser catches (hydration, real Supabase wiring), also run the browser smoke via `uv run task test:e2e` with `uv run task dev` up — always through the task, never bare `npx playwright test` (the task is what exports the seeder's env). The E2E suite self-seeds its test user (`e2e-test@voca.local` / `voca-e2e-password-1`) into local Supabase — and every `uv run task dev` re-ensures that same login first (via `ensure-dev-user`), so it always works on a fresh/stack-reset database.
 - Plan documents live in `plans/` (e.g. `plans/<short-name>.md`), never at the repo root — one file per plan, same filename across revisions.
 - Do the work on a dedicated feature branch cut from `main` (e.g. `feature/<short-name>`, or `fix/<short-name>` for bug fixes); do not commit directly to `main`.
+- **Kill background services you started before finishing.** Any agent session that starts dev servers (`uv run task dev` / `backend` / `frontend` / a `test:e2e` run that spawns them) must stop them when the work is done: `uv run task stop-all` (or `stop-backend` + `stop-frontend` if the user may want the Supabase stack to stay). Ports 3000/8000 must be free afterwards — the person runs `uv run task dev` themselves, and blocked ports are exactly what they hit otherwise. Leaving the Supabase stack up is fine (its start is idempotent); the uvicorn/next processes are not.
 
 ## Parallel agents in git worktrees (Supabase stack mode)
 
