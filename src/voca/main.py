@@ -460,7 +460,9 @@ async def tutor_frames(
     queue = deps["events"]
     producer: asyncio.Task | None = None
     try:
-        async with tutor_agent.run_stream(prompt, message_history=history, deps=deps) as result:
+        async with tutor_agent.run_stream(
+            prompt, message_history=history, deps=deps, conversation_id=session_id
+        ) as result:
 
             async def emit(text: str) -> None:
                 if not text:
@@ -651,6 +653,9 @@ async def end_session(request: SessionActionRequest, user=Depends(get_current_us
             "existing_cards": existing_cards,
             "target_language": language,
         },
+        # Pin the Logfire conversation id to the DB session so every agent run of
+        # this conversation (tutor turns + analyst) groups in Logfire.
+        conversation_id=session["id"],
     )
     analysis = result.output
     # Backstop: drop duplicates of existing/accepted cards and anything past the cap

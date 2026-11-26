@@ -22,7 +22,7 @@ uv run task test:e2e     # Playwright browser smoke — NOT part of the gate; ne
 uv run task check        # every automated gate: test + lint + check:frontend
 ```
 
-Env: `src/voca/.env` (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `LLM_BASE_URL`, `LLM_MODEL`) and `frontend/.env.local` (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`). Ollama must be running at `http://localhost:11434` and signed in for cloud models.
+Env: `src/voca/.env` (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `LLM_BASE_URL`, `LLM_MODEL`, `LOGFIRE_SERVICE_NAME` — the Logfire SDK's own env var, read via pydantic-settings) and `frontend/.env.local` (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`). Ollama must be running at `http://localhost:11434` and signed in for cloud models.
 
 ## Layout
 

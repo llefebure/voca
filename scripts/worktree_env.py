@@ -9,8 +9,8 @@ current project and rewrites the untracked env files from its real values:
 - ``src/voca/.env``        -> SUPABASE_URL / service key + frontend CORS ports
 - ``frontend/.env.local``  -> anon key / supabase URL / backend URL
 
-Preserved across runs: any ``LLM_*`` / ``VOCA_*`` lines already present in
-``src/voca/.env`` (they are worktree-independent and usually copied from the
+Preserved across runs: any ``LLM_*`` / ``LOGFIRE_*`` lines already present
+in ``src/voca/.env`` (they are worktree-independent and usually copied from the
 main checkout once).
 
 Usage (all paths relative to the repo root whose env files are written):
@@ -48,8 +48,11 @@ LLM_ENV_DEFAULTS: dict[str, str] = {
     "LLM_BASE_URL": "http://localhost:11434/v1",
     "LLM_MODEL": "gemma4:31b-cloud",
 }
+LOGFIRE_ENV_DEFAULTS: dict[str, str] = {
+    "LOGFIRE_SERVICE_NAME": "voca-backend",
+}
 # Keys kept from an existing src/voca/.env across syncs.
-PRESERVE_PREFIXES = ("LLM_",)
+PRESERVE_PREFIXES = ("LLM_", "LOGFIRE_")
 
 
 def _say(msg: str) -> None:
@@ -182,7 +185,12 @@ def write_env_files(frontend_port: int, backend_port: int, stack_env: dict[str, 
         ("BACKEND_PORT", str(backend_port)),
         ("VOCA_FRONTEND_URLS", front_urls),
         *((k, preserved.get(k, default)) for k, default in LLM_ENV_DEFAULTS.items()),
-        *((k, v) for k, v in preserved.items() if k not in LLM_ENV_DEFAULTS),
+        *((k, preserved.get(k, default)) for k, default in LOGFIRE_ENV_DEFAULTS.items()),
+        *(
+            (k, v)
+            for k, v in preserved.items()
+            if k not in LLM_ENV_DEFAULTS and k not in LOGFIRE_ENV_DEFAULTS
+        ),
     ]
     write_kv(ENV_PATH, backend_env)
 

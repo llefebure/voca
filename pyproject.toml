@@ -10,6 +10,7 @@ dependencies = [
     "httpx>=0.28.1",
     "logfire[fastapi,httpx]>=5.4.0",
     "pydantic-ai>=2.66.0",
+    "pydantic-settings>=2.16",
     "python-dotenv>=1.2.4",
     "supabase>=2.34.1",
     "uvicorn>=0.54.0",
