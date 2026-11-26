@@ -12,7 +12,7 @@ from pydantic_ai.models.test import TestModel
 
 from voca import main as voca_main
 from voca.agents.tutor_agent import tutor_agent
-from voca.services.telemetry import SERVICE_NAME
+from voca.services.telemetry import SERVICE_NAME, TelemetrySettings
 
 AUTH = {"Authorization": "Bearer valid-token"}
 
@@ -79,3 +79,40 @@ async def test_chat_agent_run_span_carries_conversation_id(
         if span["attributes"].get("gen_ai.conversation.id")
     }
     assert stamped == {"sess-42"}
+
+
+def test_service_name_reads_env(monkeypatch):
+    """TelemetrySettings reads LOGFIRE_SERVICE_NAME (the SDK's own env var)."""
+    monkeypatch.setenv("LOGFIRE_SERVICE_NAME", "other-name")
+    assert TelemetrySettings().service_name == "other-name"
+
+
+def test_service_name_default(monkeypatch):
+    """Without the env var the former hard-coded default applies."""
+    monkeypatch.delenv("LOGFIRE_SERVICE_NAME", raising=False)
+    assert TelemetrySettings().service_name == "voca-backend"
+
+
+@pytest.mark.asyncio
+async def test_model_request_spans_capture_content(
+    client, logfire_service_name, fake_supabase, capfire: CaptureLogfire
+):
+    """`include_content=True`: model-request spans expose the LLM messages
+    (`gen_ai.input.messages`), so prompts/completions show in the Logfire UI."""
+    fake_supabase.results[("sessions", "select")] = [
+        {"id": "sess-42", "user_id": "user-1", "status": "active", "language": "es"}
+    ]
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
+
+    with tutor_agent.override(model=TestModel(call_tools=[])):
+        response = await client.post(
+            "/chat", json={"message": "hola", "session_id": "sess-42"}, headers=AUTH
+        )
+    assert response.status_code == 200
+
+    spans = capfire.exporter.exported_spans_as_dict(include_resources=True)
+    content = [span for span in spans if span["attributes"].get("gen_ai.input.messages")]
+    assert content, (
+        f"no content-carrying spans among: "
+        f"{[(span['name'], sorted(span['attributes'])) for span in spans]}"
+    )
