@@ -1,7 +1,10 @@
 // Target (learning) languages Voca can tutor. The interface stays English;
-// this is the single place language names and per-language TTS config live,
-// mirroring the backend's `services/languages.py`. Adding a language = adding
-// it here (backend + picker) once its models exist.
+// per-language names and TTS config live here, mirroring the backend's
+// `services/languages.py`. The codes list is DB-canonical: the
+// `public.language_code` domain in supabase/migrations/ defines it, and a
+// drift-guard test (tests/languages.test.ts) asserts this map matches that
+// domain. Adding a language = one ALTER DOMAIN migration + entries here and
+// in the backend map once its models exist.
 
 export type LanguageCode = 'es'
 

@@ -1,0 +1,5 @@
+-- Voca seeds nothing: the schema (and the `language_code` domain) is the
+-- deliverable; test/dev logins are created at runtime by scripts/ensure-
+-- dev-user.mjs (`uv run task dev` / `test:e2e` seeding, service role), not by
+-- static SQL. This placeholder exists because config.toml enables [db.seed]
+-- with sql_paths = ["./seed.sql"].

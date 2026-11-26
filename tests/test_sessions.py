@@ -480,6 +480,43 @@ def test_harvest_new_cards_normalizes_before_matching():
     assert [card.front for card in kept] == ["tener sed"]
 
 
+def test_harvest_new_cards_drops_types_outside_the_db_whitelist():
+    """LLM output can never violate the cards.type CHECK (and 500 session end).
+    Only the four DB-allowed types survive; a near-miss casing is outside too."""
+    candidates = [
+        CardCandidate(
+            type="word",
+            front="gato",
+            back="cat",
+            source_sentence="s",
+            reason="ok",
+        ),
+        CardCandidate(
+            type="grammar",  # allowed
+            front="gustar",
+            back="to like",
+            source_sentence="s",
+            reason="ok",
+        ),
+        CardCandidate(
+            type="vocabulary",  # plausible LLM improvisation — not a DB type
+            front="ventana",
+            back="window",
+            source_sentence="s",
+            reason="hallucinated type",
+        ),
+        CardCandidate(
+            type="Word",  # enum-adjacent casing is still outside the whitelist
+            front="perro",
+            back="dog",
+            source_sentence="s",
+            reason="casing drift",
+        ),
+    ]
+    kept = voca_main.harvest_new_cards(candidates, [])
+    assert [card.front for card in kept] == ["gato", "gustar"]
+
+
 # --- Session end: the FSRS rubric grades the whole transcript -----------------------
 
 
@@ -574,11 +611,9 @@ def test_rating_map_is_used_for_graded_outcomes():
 # --- Effective profile + language-scoped due cards -------------------------------
 
 
-def test_effective_profile_overlays_user_language(fake_supabase):
-    """The user_languages row wins over the profile for level/goals/interests."""
-    fake_supabase.results[("profiles", "select")] = [
-        {"id": "user-1", "level": "A2", "goals": "global goals", "interests": "i0"}
-    ]
+def test_effective_profile_reads_the_user_language_row(fake_supabase):
+    """Level/goals/interests come solely from the language's user_languages row."""
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
     fake_supabase.results[("user_languages", "select")] = [
         {"level": "B1", "goals": "es goals", "interests": "es interests"}
     ]
@@ -595,33 +630,35 @@ def test_effective_profile_overlays_user_language(fake_supabase):
     }
 
 
-def test_effective_profile_partial_overlay_keeps_profile_fields(fake_supabase):
-    fake_supabase.results[("profiles", "select")] = [
-        {"id": "user-1", "level": "A2", "goals": "global goals"}
-    ]
+def test_effective_profile_partial_row_only_carries_its_fields(fake_supabase):
+    """A row that only sets goals yields exactly that — no other source exists."""
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1"}]
     fake_supabase.results[("user_languages", "select")] = [{"goals": "fr goals"}]
 
     effective = voca_main.fetch_effective_profile("user-1", "fr")
 
     assert effective["target_language"] == "fr"
-    assert effective["level"] == "A2"  # no row value → profile field kept
     assert effective["goals"] == "fr goals"
-    assert "interests" not in effective  # absent from both profile and row
+    assert "level" not in effective
+    assert "interests" not in effective
 
 
-def test_effective_profile_without_row_falls_back_to_profile(fake_supabase):
-    fake_supabase.results[("profiles", "select")] = [
-        {"id": "user-1", "target_language": "es", "level": "B1"}
-    ]
+def test_effective_profile_without_row_yields_the_tutor_defaults_gap(fake_supabase):
+    """A language picked but never onboarded/practiced has no user_languages row:
+    no learner-context fields are returned, and the tutor agent's own defaults
+    (learn <language> / Intermediate (B1) / general topics) render instead."""
+    fake_supabase.results[("profiles", "select")] = [{"id": "user-1", "target_language": "es"}]
+    fake_supabase.results[("user_languages", "select")] = []
 
-    # No language requested: legacy path falls back to the profile's pointer.
-    effective = voca_main.fetch_effective_profile("user-1", None)
-    assert effective["target_language"] == "es"
-    assert effective["level"] == "B1"
-    # A brand-new language has no user_languages row yet: defaults apply everywhere.
-    effective = voca_main.fetch_effective_profile("user-1", "pt")
-    assert effective["target_language"] == "pt"
-    assert effective["level"] == "B1"
+    # No language requested: the profile's pointer decides which row to fetch.
+    effective_es = voca_main.fetch_effective_profile("user-1", None)
+    assert effective_es["target_language"] == "es"
+
+    # A brand-new language has no row either.
+    effective_pt = voca_main.fetch_effective_profile("user-1", "pt")
+    assert effective_pt["target_language"] == "pt"
+    for field in ("level", "goals", "interests"):
+        assert field not in effective_pt
 
 
 def test_fetch_due_cards_scopes_by_language(fake_supabase):

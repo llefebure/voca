@@ -16,7 +16,7 @@ const seed = vi.hoisted(() => {
   // Closures must read `seedRef` (the object tests mutate), not local copies.
   seedRef.tables = {
     profiles: {
-      maybeSingle: { id: 'test-user', target_language: 'es' },
+      maybeSingle: { id: 'test-user', target_language: 'es', onboarded_at: '2026-03-01T10:00:00Z' },
       writeError: () => seedRef.profileUpdateError,
     },
     user_languages: { select: () => seedRef.userLanguages },
