@@ -29,7 +29,7 @@ vi.mock('@/lib/supabase', async () => {
   return {
     supabase: createSupabaseMock({
       tables: {
-        profiles: { maybeSingle: { id: 'test-user', target_language: 'es' } },
+        profiles: { maybeSingle: { id: 'test-user', target_language: 'es', onboarded_at: '2026-03-01T10:00:00Z' } },
         user_languages: { select: [{ language: 'es', last_practiced_at: '2026-03-01T10:00:00Z' }] },
       },
     }),

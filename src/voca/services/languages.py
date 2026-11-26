@@ -1,9 +1,12 @@
 """Supported target (learning) languages.
 
-The app's interface stays English; only the language the user is *learning*
-is configurable here. Adding a future language means adding one entry to
-`SUPPORTED_LANGUAGES` (and enabling it in the frontend picker once its models
-exist) — no code-level assumptions about Spanish remain anywhere.
+The interface stays English; only the language the user is *learning* is
+configurable here. The single canonical definition of the supported list is
+the DB's `public.language_code` domain (see the baseline migration in
+`supabase/migrations/`) — `SUPPORTED_LANGUAGES` must mirror it exactly, which
+a drift-guard test (tests/test_language_domain.py) enforces by parsing the
+migration. Adding a language = one ALTER DOMAIN migration plus entries here
+and in `frontend/lib/languages.ts` (plus its TTS/model config).
 """
 
 DEFAULT_LANGUAGE = "es"

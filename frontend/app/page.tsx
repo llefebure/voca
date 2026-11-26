@@ -103,7 +103,7 @@ function ChatPageContent() {
   const searchParams = useSearchParams()
   const continueSessionId = searchParams.get('session')
 
-  // Auth check (profile existence gates onboarding; the language lives in context).
+  // Auth check (the onboarding stamp gates the chat; the language lives in context).
   React.useEffect(() => {
     const checkUser = async () => {
       const {
@@ -113,12 +113,14 @@ function ChatPageContent() {
         router.push('/auth')
         return
       }
+      // The profiles row always exists (on_auth_user_created trigger); the chat
+      // opens only once onboarding has stamped `onboarded_at` (non-null).
       const { data: profile } = await supabase
         .from('profiles')
-        .select('id')
+        .select('onboarded_at')
         .eq('id', user.id)
         .maybeSingle()
-      if (!profile) {
+      if (!profile?.onboarded_at) {
         router.push('/onboarding')
         return
       }

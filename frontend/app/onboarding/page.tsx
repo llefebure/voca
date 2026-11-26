@@ -42,21 +42,28 @@ export default function OnboardingPage() {
     if (!user) return
 
     try {
-      // `target_language` is the target-language pointer; the same wizard (re)runs
-      // for a language (re)onboarding — its row lands in user_languages.
-      // supabase-js never throws on failed writes; errors come back in-band, so
-      // each result must be checked here or failures silently "succeed".
-      const { error: profilesError } = await supabase.from('profiles').upsert({
-        id: user.id,
-        target_language: formData.target_language,
-        level: formData.level,
-        goals: formData.goals,
-        interests: formData.interests
-      })
+      // The profiles row already exists — the on_auth_user_created trigger
+      // creates it at signup — so this update stamps the target-language pointer
+      // and the onboarding completion time. supabase-js never throws on failed
+      // writes; errors come back in-band, so each result must be checked here or
+      // failures silently "succeed".
+      const { data: updated, error: profilesError } = await supabase
+        .from('profiles')
+        .update({
+          target_language: formData.target_language,
+          onboarded_at: new Date().toISOString()
+        })
+        .eq('id', user.id)
+        .select('id')
       if (profilesError) throw profilesError
-      // Per-language learner details live in user_languages (profile fallbacks stay
-      // in profiles for pre-multi-language data). last_practiced_at is untouched so
-      // re-onboarding never resets the practiced ordering.
+      // 0 rows ⇒ the profile row is missing (RLS or trigger failure): surface
+      // the setup error instead of "succeeding" into a chat page that would
+      // bounce straight back to onboarding.
+      if (!updated || updated.length === 0) throw new Error('Profile row missing')
+      // Per-language learner details live in user_languages — the single write
+      // of this context (profiles' legacy level/goals/interests copies are gone
+      // from the schema). last_practiced_at is untouched so re-onboarding never
+      // resets the practiced ordering.
       const { error: userLanguagesError } = await supabase.from('user_languages').upsert({
         user_id: user.id,
         language: formData.target_language,

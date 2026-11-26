@@ -58,6 +58,11 @@ tasks:
     cmds:
       - uv run python scripts/worktree_env.py sync
 
+  migration:new:
+    desc: 'Create a migration file with the CLI-canonical name (never hand-type filenames). Usage: uv run task migration:new -- <name> — one snake_case token, e.g. add_card_reviews'
+    cmds:
+      - uv run python scripts/new_migration.py {{.CLI_ARGS}}
+
   worktree:new:
     desc: 'Create an isolated agent worktree. Usage: uv run task worktree:new -- feature/<short-name> [base-ref]'
     cmds:

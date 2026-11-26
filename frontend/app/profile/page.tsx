@@ -13,15 +13,7 @@ import { useLanguage } from '@/components/language-context'
 import { toast } from '@/components/ui/toast'
 import { languageName } from '@/lib/languages'
 
-type ProfileFields = {
-  target_language?: string
-  level?: string
-  goals?: string
-  interests?: string
-}
-
 export default function ProfilePage() {
-  const [profile, setProfile] = useState<ProfileFields | null>(null)
   const [isEditing, setIsEditing] = useState(false)
   const [edited, setEdited] = useState<{ level?: string; goals?: string; interests?: string }>({})
   const [loading, setLoading] = useState(true)
@@ -32,36 +24,26 @@ export default function ProfilePage() {
   const { activeLanguage, practicedLanguages, refresh: refreshLanguages } = useLanguage()
 
   useEffect(() => {
-    const fetchProfile = async () => {
+    const checkUser = async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          router.push('/auth')
-          return
-        }
-
-        const { data } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', user.id)
-          .single()
-
-        setProfile(data)
+        if (!user) router.push('/auth')
       } catch (error) {
-        console.error('Error fetching profile:', error)
+        console.error('Error checking the signed-in user:', error)
       } finally {
         setLoading(false)
       }
     }
-    fetchProfile()
+    checkUser()
   }, [router])
 
-  // Learner details for the active language: its user_languages row if onboarded,
-  // otherwise the legacy profile fields (pre-multi-language data).
+  // Learner details for the active language, from its user_languages row only —
+  // a language picked but never onboarded/practiced has no row yet and shows a
+  // blank form (the old profiles-level fallback columns are gone from the schema).
   const activeRow = practicedLanguages.find((row) => row.language === activeLanguage)
-  const level = activeRow?.level ?? profile?.level ?? null
-  const goals = activeRow?.goals ?? profile?.goals ?? null
-  const interests = activeRow?.interests ?? profile?.interests ?? null
+  const level = activeRow?.level ?? null
+  const goals = activeRow?.goals ?? null
+  const interests = activeRow?.interests ?? null
 
   const startEditing = () => {
     setEdited({ level: level ?? undefined, goals: goals ?? undefined, interests: interests ?? undefined })

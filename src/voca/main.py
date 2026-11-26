@@ -110,12 +110,13 @@ def fetch_profile_by(user_id: str) -> dict[str, Any]:
 
 
 def fetch_effective_profile(user_id: str, language: str | None) -> dict[str, Any]:
-    """Profile + the learner context for `language`, ready as agent `user_profile` deps.
+    """Profile pointer + the learner context for `language`, ready as agent `user_profile` deps.
 
-    `target_language` is pinned to `language` (legacy rows without a stamp fall back to
-    the profile's active language) so agents always speak of the session's language, not
-    wherever the profile happens to point. The `user_languages` row's level/goals/
-    interests overlay the profile fields when present.
+    `target_language` is pinned to `language` (None falls back to the profile's active
+    language) so agents always speak of the session's language, not wherever the profile
+    happens to point. Level/goals/interests live solely in the `user_languages` row for
+    that language; when it doesn't exist yet (language picked, never onboarded/practiced),
+    the fields are simply absent and the tutor agent's own defaults render.
     """
     profile = fetch_profile_by(user_id)
     effective_language = language or profile.get("target_language") or DEFAULT_LANGUAGE
@@ -127,12 +128,7 @@ def fetch_effective_profile(user_id: str, language: str | None) -> dict[str, Any
         .maybe_single()
         .execute()
     )
-    row = res.data or {}
-    effective = {**profile, "target_language": effective_language}
-    for field in ("level", "goals", "interests"):
-        if row.get(field):
-            effective[field] = row[field]
-    return effective
+    return {**profile, **(res.data or {}), "target_language": effective_language}
 
 
 def fetch_due_cards(user_id: str, language: str | None = None) -> list[dict[str, Any]]:
@@ -253,6 +249,10 @@ def sse(event: dict[str, Any]) -> str:
 # The analyst is prompted for 0-5 cards; this cap also holds if it over-produces.
 MAX_NEW_CARDS = 5
 
+# `cards.type`'s CHECK — enforced here instead of letting LLM output violate it
+# and 500 session end.
+CARD_TYPES = frozenset({"word", "phrase", "correction", "grammar"})
+
 
 def normalized_card_text(text: str) -> str:
     """Casefolded text without punctuation, for card-duplicate matching."""
@@ -265,9 +265,10 @@ def harvest_new_cards(
 ) -> list[CardCandidate]:
     """Deterministic backstop for the analyst's card harvest — don't trust the prompt.
 
-    Drops any candidate whose normalized front or back matches an existing card or an
-    already-accepted candidate from this same session (repeated items yield one card),
-    and caps the result at `MAX_NEW_CARDS`.
+    Drops candidates whose `type` isn't one of the DB's four allowed values (they'd hit
+    the cards.type CHECK and 500 session end), any candidate whose normalized front or
+    back matches an existing card or an already-accepted candidate from this same session
+    (repeated items yield one card), and caps the result at `MAX_NEW_CARDS`.
     """
     seen: set[str] = set()
     for row in existing_cards:
@@ -277,6 +278,13 @@ def harvest_new_cards(
                 seen.add(normalized_card_text(text))
     kept: list[CardCandidate] = []
     for card in candidates:
+        if card.type not in CARD_TYPES:
+            logger.warning(
+                "dropping card candidate with unknown type %r (allowed: %s)",
+                card.type,
+                ", ".join(sorted(CARD_TYPES)),
+            )
+            continue
         forms = [normalized_card_text(text) for text in (card.front, card.back) if text.strip()]
         if forms and seen.isdisjoint(forms):
             seen.update(forms)

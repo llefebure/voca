@@ -13,7 +13,7 @@ import { LanguageProvider } from '@/components/language-context'
  */
 const seed = vi.hoisted(() => ({
   tables: {
-    profiles: { maybeSingle: { id: 'test-user', target_language: 'es' } },
+    profiles: { maybeSingle: { id: 'test-user', target_language: 'es', onboarded_at: '2026-03-01T10:00:00Z' } },
     user_languages: { select: [{ language: 'es', last_practiced_at: '2026-03-01T10:00:00Z' }] },
     sessions: {
       select: [

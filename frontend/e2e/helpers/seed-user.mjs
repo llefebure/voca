@@ -66,15 +66,17 @@ export async function ensureUser() {
   })
   if (!updated.ok) throw new Error(`Could not re-assert the seeded user's password: ${updated.status} ${await updated.text()}`)
 
-  // profiles row (target-language pointer) — upsert so re-seeds are harmless.
+  // profiles row (target-language pointer + onboarding stamp; NULL onboarded_at
+  // would bounce every route to /onboarding) — upsert so re-seeds are harmless.
   const profile = await fetch(`${url}/rest/v1/profiles`, {
     method: 'POST',
     headers: { ...serviceHeaders, Prefer: 'resolution=merge-duplicates' },
-    body: JSON.stringify({ id: userId, target_language: 'es' }),
+    body: JSON.stringify({ id: userId, target_language: 'es', onboarded_at: new Date().toISOString() }),
   })
   if (!profile.ok) throw new Error(`Could not upsert the E2E profile: ${profile.status} ${await profile.text()}`)
 
-  // One practiced-language row so the language switcher has something to show.
+  // One practiced-language row so the language switcher has something to show
+  // (learner context lives per language in user_languages).
   const languageRow = await fetch(
     `${url}/rest/v1/user_languages`,
     {
